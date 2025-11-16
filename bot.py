@@ -53,24 +53,27 @@ async def compare(ctx):
         await ctx.send(f"❌ 파일 다운로드 오류: {e}")
         return
 
-    # 분석 시작
-    await ctx.send("⏳ 분석 중...")
+    # 분석 시작 - 타이핑 표시와 함께
+    status_msg = await ctx.send("⏳ 분석 중...")
 
     try:
-        analyzer = WowLogAnalyzer(file1_path, file2_path)
-        result = analyzer.analyze()
+        # 타이핑 중 표시
+        async with ctx.typing():
+            analyzer = WowLogAnalyzer(file1_path, file2_path)
+            result = analyzer.analyze()
 
         if result is None or 'error' in result:
             error_msg = result.get('error', '알 수 없는 오류') if result else '분석 실패'
-            await ctx.send(f"❌ {error_msg}")
+            await status_msg.edit(content=f"❌ {error_msg}")
             return
 
         # 결과를 Embed로 출력
         embed = create_embed(result, csv_files[0].filename, csv_files[1].filename)
+        await status_msg.edit(content="✅ 분석 완료!")
         await ctx.send(embed=embed)
 
     except Exception as e:
-        await ctx.send(f"❌ 분석 오류: {e}")
+        await status_msg.edit(content=f"❌ 분석 오류: {e}")
     finally:
         # 임시 파일 삭제
         try:
