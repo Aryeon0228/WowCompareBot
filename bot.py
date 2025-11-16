@@ -248,182 +248,302 @@ def add_dps_fields(embed: discord.Embed, result: dict):
     """DPS 분석 결과를 Embed에 추가"""
     summary = result.get('summary', {})
 
-    # 총 DPS
+    # 전체 통계 (한 줄로)
+    stats_parts = []
     if 'total_dps' in summary:
         dps_data = summary['total_dps']
         dps_diff = dps_data['diff']
         dps_diff_percent = dps_data['diff_percent']
-
         indicator = "📈" if dps_diff > 0 else "📉" if dps_diff < 0 else "➖"
         sign = "+" if dps_diff > 0 else ""
+        stats_parts.append(f"**DPS:** {dps_data['after']:.1f} ({sign}{dps_diff_percent:.1f}%) {indicator}")
 
-        embed.add_field(
-            name="💥 총 DPS",
-            value=f"**Before:** {dps_data['before']:.1f}\n"
-                  f"**After:** {dps_data['after']:.1f}\n"
-                  f"{indicator} **차이:** {sign}{dps_diff:.1f} ({sign}{dps_diff_percent:.1f}%)",
-            inline=False
-        )
+    if 'total_damage' in summary:
+        dmg_data = summary['total_damage']
+        dmg_m_before = dmg_data['before'] / 1_000_000
+        dmg_m_after = dmg_data['after'] / 1_000_000
+        stats_parts.append(f"**총 데미지:** {dmg_m_after:.2f}M")
 
-    # 주요 스킬 비교 (상위 5개)
+    if 'total_casts' in summary:
+        casts_data = summary['total_casts']
+        stats_parts.append(f"**시전:** {casts_data['after']}")
+
+    if 'avg_crit' in summary:
+        crit_data = summary['avg_crit']
+        crit_sign = "+" if crit_data['diff'] > 0 else ""
+        stats_parts.append(f"**평균 치명타:** {crit_data['after']:.1f}% ({crit_sign}{crit_data['diff']:.1f}%)")
+
+    if stats_parts:
+        embed.add_field(name="📊 전체 통계", value=" | ".join(stats_parts), inline=False)
+
+    # 상위 기여도 스킬
+    top_contributors = result.get('top_contributors', [])
+    if top_contributors:
+        contrib_text = ""
+        for i, skill in enumerate(top_contributors[:5], 1):
+            contrib_text += f"{i}. **{skill['name']}** - {skill['percent']:.1f}%\n"
+        embed.add_field(name="🏆 상위 기여도 스킬", value=contrib_text.strip(), inline=True)
+
+    # 주요 스킬 상세 비교 (기여도 순으로 상위 3개)
     skills = result.get('skills', [])
     if skills:
-        # Casts 차이가 큰 순으로 정렬
-        top_skills = sorted(skills, key=lambda x: abs(x['casts']['diff']), reverse=True)[:5]
+        top_skills = sorted(skills, key=lambda x: x['contribution_percent']['after'], reverse=True)[:3]
 
         skills_text = ""
         for skill in top_skills:
+            # 기본 정보
+            contrib_diff = skill['contribution_percent']['diff']
+            contrib_sign = "+" if contrib_diff > 0 else ""
+
+            skills_text += f"**{skill['name']}** ({skill['contribution_percent']['after']:.1f}%, {contrib_sign}{contrib_diff:.1f}%)\n"
+
+            # Casts
             casts_diff = skill['casts']['diff']
+            casts_indicator = "↑" if casts_diff > 0 else "↓" if casts_diff < 0 else "-"
+            skills_text += f"  시전: {skill['casts']['after']} ({casts_indicator}{abs(casts_diff)})"
+
+            # Avg Hit
+            if 'avg_hit' in skill and skill['avg_hit']['after'] > 0:
+                avg_diff_pct = (skill['avg_hit']['diff'] / skill['avg_hit']['before'] * 100) if skill['avg_hit']['before'] > 0 else 0
+                if abs(avg_diff_pct) > 1:
+                    avg_sign = "+" if avg_diff_pct > 0 else ""
+                    skills_text += f" | 평균: {skill['avg_hit']['after']:.0f} ({avg_sign}{avg_diff_pct:.1f}%)"
+
+            skills_text += "\n"
+
+            # Crit %
             crit_diff = skill['crit_percent']['diff']
+            if abs(crit_diff) > 0.5:
+                crit_sign = "+" if crit_diff > 0 else ""
+                skills_text += f"  치명타: {skill['crit_percent']['after']:.1f}% ({crit_sign}{crit_diff:.1f}%)\n"
 
-            casts_indicator = "⬆️" if casts_diff > 0 else "⬇️" if casts_diff < 0 else "➖"
-            crit_sign = "+" if crit_diff > 0 else ""
-
-            skills_text += f"**{skill['name']}**\n"
-            skills_text += f"  {casts_indicator} Casts: {skill['casts']['before']} → {skill['casts']['after']} ({casts_diff:+d})\n"
-            skills_text += f"  🎯 Crit: {skill['crit_percent']['before']:.1f}% → {skill['crit_percent']['after']:.1f}% ({crit_sign}{crit_diff:.1f}%)\n"
-
-            # Uptime이 있는 경우 (DoT 스킬)
-            if skill['uptime_percent']['before'] > 0 or skill['uptime_percent']['after'] > 0:
+            # Uptime (DoT 스킬)
+            if skill['uptime_percent']['after'] > 0 or skill['uptime_percent']['before'] > 0:
                 uptime_diff = skill['uptime_percent']['diff']
                 uptime_sign = "+" if uptime_diff > 0 else ""
-                skills_text += f"  ⏱️ Uptime: {skill['uptime_percent']['before']:.1f}% → {skill['uptime_percent']['after']:.1f}% ({uptime_sign}{uptime_diff:.1f}%)\n"
+                uptime_indicator = "✓" if skill['uptime_percent']['after'] >= 80 else "⚠️"
+                skills_text += f"  {uptime_indicator} Uptime: {skill['uptime_percent']['after']:.1f}% ({uptime_sign}{uptime_diff:.1f}%)\n"
+
+            # 시전 효율성
+            if 'damage_per_cast' in skill and skill['damage_per_cast']['after'] > 0:
+                dpc_diff_pct = (skill['damage_per_cast']['diff'] / skill['damage_per_cast']['before'] * 100) if skill['damage_per_cast']['before'] > 0 else 0
+                if abs(dpc_diff_pct) > 5:
+                    dpc_sign = "+" if dpc_diff_pct > 0 else ""
+                    skills_text += f"  효율성: {skill['damage_per_cast']['after']:.0f}/cast ({dpc_sign}{dpc_diff_pct:.1f}%)\n"
 
             skills_text += "\n"
 
         if skills_text:
-            embed.add_field(name="🎯 주요 스킬 비교", value=skills_text.strip(), inline=False)
+            embed.add_field(name="🎯 주요 스킬 상세", value=skills_text.strip(), inline=False)
 
 
 def add_tank_fields(embed: discord.Embed, result: dict):
     """탱커 분석 결과를 Embed에 추가"""
     summary = result.get('summary', {})
 
-    # 총 DTPS
+    # 전체 통계
+    stats_parts = []
     if 'total_dtps' in summary:
         dtps_data = summary['total_dtps']
         dtps_diff = dtps_data['diff']
         dtps_diff_percent = dtps_data['diff_percent']
-
-        # 탱커는 DTPS가 감소하는 것이 좋음
-        indicator = "📉" if dtps_diff < 0 else "📈" if dtps_diff > 0 else "➖"
+        indicator = "📉" if dtps_diff < 0 else "📈" if dtps_diff < 0 else "➖"
         sign = "+" if dtps_diff > 0 else ""
+        stats_parts.append(f"**DTPS:** {dtps_data['after']:.1f} ({sign}{dtps_diff_percent:.1f}%) {indicator}")
 
-        embed.add_field(
-            name="💔 총 받은 피해 (DTPS)",
-            value=f"**Before:** {dtps_data['before']:.1f}\n"
-                  f"**After:** {dtps_data['after']:.1f}\n"
-                  f"{indicator} **차이:** {sign}{dtps_diff:.1f} ({sign}{dtps_diff_percent:.1f}%)",
-            inline=False
-        )
+    if 'total_damage_taken' in summary:
+        dmg_data = summary['total_damage_taken']
+        dmg_m = dmg_data['after'] / 1_000_000
+        stats_parts.append(f"**총 피해:** {dmg_m:.2f}M")
 
-    # Mitigated
+    if 'avg_miss_percent' in summary:
+        miss_data = summary['avg_miss_percent']
+        miss_sign = "+" if miss_data['diff'] > 0 else ""
+        stats_parts.append(f"**회피율:** {miss_data['after']:.1f}% ({miss_sign}{miss_data['diff']:.1f}%)")
+
+    if 'avg_uptime' in summary:
+        uptime_data = summary['avg_uptime']
+        uptime_sign = "+" if uptime_data['diff'] > 0 else ""
+        stats_parts.append(f"**버프 유지:** {uptime_data['after']:.1f}% ({uptime_sign}{uptime_data['diff']:.1f}%)")
+
+    if stats_parts:
+        embed.add_field(name="📊 전체 통계", value=" | ".join(stats_parts), inline=False)
+
+    # 피해 감소 (Mitigated)
     if 'mitigated' in summary:
         mit_data = summary['mitigated']
         mit_diff = mit_data['diff']
-        indicator = "📈" if mit_diff > 0 else "📉" if mit_diff < 0 else "➖"
+        mit_diff_pct = mit_data['diff_percent']
+        indicator = "✓" if mit_diff > 0 else "⚠️"
         sign = "+" if mit_diff > 0 else ""
+        mit_m = mit_data['after'] / 1_000_000
 
         embed.add_field(
-            name="🛡️ 피해 감소 (Mitigated)",
-            value=f"**Before:** {mit_data['before']:.1f}\n"
-                  f"**After:** {mit_data['after']:.1f}\n"
-                  f"{indicator} **차이:** {sign}{mit_diff:.1f}",
+            name=f"{indicator} 피해 감소 (Mitigated)",
+            value=f"**{mit_m:.2f}M** ({sign}{mit_diff_pct:.1f}%)",
             inline=True
         )
 
-    # Miss %
-    if 'avg_miss_percent' in summary:
-        miss_data = summary['avg_miss_percent']
-        miss_diff = miss_data['diff']
-        # Miss가 증가하는 것이 좋음 (회피)
-        indicator = "📈" if miss_diff > 0 else "📉" if miss_diff < 0 else "➖"
-        sign = "+" if miss_diff > 0 else ""
-
-        embed.add_field(
-            name="🌫️ 평균 회피율 (Miss %)",
-            value=f"**Before:** {miss_data['before']:.1f}%\n"
-                  f"**After:** {miss_data['after']:.1f}%\n"
-                  f"{indicator} **차이:** {sign}{miss_diff:.1f}%",
-            inline=True
-        )
-
-    # 주요 피해 소스
+    # 주요 피해 소스 (기여도 순)
     damage_sources = result.get('damage_sources', [])
     if damage_sources:
-        top_sources = sorted(damage_sources, key=lambda x: abs(x['dtps']['diff']), reverse=True)[:5]
+        top_sources = sorted(damage_sources, key=lambda x: x['contribution_percent']['after'], reverse=True)[:4]
 
         sources_text = ""
         for source in top_sources:
-            dtps_diff = source['dtps']['diff']
-            indicator = "⬆️" if dtps_diff > 0 else "⬇️" if dtps_diff < 0 else "➖"
+            contrib = source['contribution_percent']['after']
+            contrib_diff = source['contribution_percent']['diff']
+            contrib_sign = "+" if contrib_diff > 0 else ""
 
-            sources_text += f"**{source['name']}**\n"
-            sources_text += f"  {indicator} DTPS: {source['dtps']['before']:.1f} → {source['dtps']['after']:.1f} ({dtps_diff:+.1f})\n\n"
+            dtps_diff = source['dtps']['diff']
+            dtps_indicator = "↑" if dtps_diff > 0 else "↓" if dtps_diff < 0 else "-"
+
+            sources_text += f"**{source['name']}** ({contrib:.1f}%, {contrib_sign}{contrib_diff:.1f}%)\n"
+            sources_text += f"  DTPS: {source['dtps']['after']:.1f} ({dtps_indicator}{abs(dtps_diff):.1f})"
+
+            # Avg Hit
+            if 'avg_hit' in source and source['avg_hit']['after'] > 0:
+                avg_diff = source['avg_hit']['diff']
+                if abs(avg_diff) > 100:
+                    avg_sign = "+" if avg_diff > 0 else ""
+                    sources_text += f" | 평균: {source['avg_hit']['after']:.0f} ({avg_sign}{avg_diff:.0f})"
+
+            sources_text += "\n\n"
 
         if sources_text:
             embed.add_field(name="⚔️ 주요 피해 소스", value=sources_text.strip(), inline=False)
+
+    # 방어 스킬 (Mitigation skills with uptime)
+    mitigation_skills = result.get('mitigation_skills', [])
+    if mitigation_skills:
+        # Uptime 차이가 큰 순으로
+        top_mit = sorted(mitigation_skills, key=lambda x: abs(x['uptime_percent']['diff']), reverse=True)[:3]
+
+        mit_text = ""
+        for skill in top_mit:
+            uptime = skill['uptime_percent']['after']
+            uptime_diff = skill['uptime_percent']['diff']
+            uptime_sign = "+" if uptime_diff > 0 else ""
+            uptime_icon = "✓" if uptime >= 70 else "⚠️"
+
+            mit_text += f"{uptime_icon} **{skill['name']}**: {uptime:.1f}% ({uptime_sign}{uptime_diff:.1f}%)\n"
+
+        if mit_text:
+            embed.add_field(name="🛡️ 방어 스킬 유지율", value=mit_text.strip(), inline=False)
 
 
 def add_healer_fields(embed: discord.Embed, result: dict):
     """힐러 분석 결과를 Embed에 추가"""
     summary = result.get('summary', {})
 
-    # 총 HPS
+    # 전체 통계
+    stats_parts = []
     if 'total_hps' in summary:
         hps_data = summary['total_hps']
         hps_diff = hps_data['diff']
         hps_diff_percent = hps_data['diff_percent']
-
         indicator = "📈" if hps_diff > 0 else "📉" if hps_diff < 0 else "➖"
         sign = "+" if hps_diff > 0 else ""
+        stats_parts.append(f"**HPS:** {hps_data['after']:.1f} ({sign}{hps_diff_percent:.1f}%) {indicator}")
 
-        embed.add_field(
-            name="💚 총 HPS",
-            value=f"**Before:** {hps_data['before']:.1f}\n"
-                  f"**After:** {hps_data['after']:.1f}\n"
-                  f"{indicator} **차이:** {sign}{hps_diff:.1f} ({sign}{hps_diff_percent:.1f}%)",
-            inline=False
-        )
+    if 'total_healing' in summary:
+        heal_data = summary['total_healing']
+        heal_m = heal_data['after'] / 1_000_000
+        stats_parts.append(f"**총 힐량:** {heal_m:.2f}M")
 
-    # Overheal %
+    if 'total_casts' in summary:
+        casts_data = summary['total_casts']
+        stats_parts.append(f"**시전:** {casts_data['after']}")
+
+    if 'avg_crit' in summary:
+        crit_data = summary['avg_crit']
+        crit_sign = "+" if crit_data['diff'] > 0 else ""
+        stats_parts.append(f"**평균 치명타:** {crit_data['after']:.1f}% ({crit_sign}{crit_data['diff']:.1f}%)")
+
+    if stats_parts:
+        embed.add_field(name="📊 전체 통계", value=" | ".join(stats_parts), inline=False)
+
+    # 오버힐
     if 'avg_overheal_percent' in summary:
         overheal_data = summary['avg_overheal_percent']
         overheal_diff = overheal_data['diff']
-        # Overheal이 감소하는 것이 좋음
-        indicator = "📉" if overheal_diff < 0 else "📈" if overheal_diff > 0 else "➖"
+        indicator = "✓" if overheal_diff < 0 else "⚠️"
         sign = "+" if overheal_diff > 0 else ""
 
         embed.add_field(
-            name="💧 평균 오버힐 %",
-            value=f"**Before:** {overheal_data['before']:.1f}%\n"
-                  f"**After:** {overheal_data['after']:.1f}%\n"
-                  f"{indicator} **차이:** {sign}{overheal_diff:.1f}%",
+            name=f"{indicator} 평균 오버힐",
+            value=f"**{overheal_data['after']:.1f}%** ({sign}{overheal_diff:.1f}%)",
             inline=True
         )
 
-    # 주요 힐 스킬
+    # 상위 기여도 힐 스킬
+    top_contributors = result.get('top_contributors', [])
+    if top_contributors:
+        contrib_text = ""
+        for i, heal in enumerate(top_contributors[:5], 1):
+            contrib_text += f"{i}. **{heal['name']}** - {heal['percent']:.1f}%\n"
+        embed.add_field(name="🏆 상위 기여도 스킬", value=contrib_text.strip(), inline=True)
+
+    # 주요 힐 스킬 상세 비교 (기여도 순으로 상위 3개)
     heals = result.get('heals', [])
     if heals:
-        top_heals = sorted(heals, key=lambda x: abs(x['hps']['diff']), reverse=True)[:5]
+        top_heals = sorted(heals, key=lambda x: x['contribution_percent']['after'], reverse=True)[:3]
 
         heals_text = ""
         for heal in top_heals:
-            hps_diff = heal['hps']['diff']
+            # 기본 정보
+            contrib_diff = heal['contribution_percent']['diff']
+            contrib_sign = "+" if contrib_diff > 0 else ""
+
+            heals_text += f"**{heal['name']}** ({heal['contribution_percent']['after']:.1f}%, {contrib_sign}{contrib_diff:.1f}%)\n"
+
+            # Casts & HPS
             casts_diff = heal['casts']['diff']
+            casts_indicator = "↑" if casts_diff > 0 else "↓" if casts_diff < 0 else "-"
+            hps_diff = heal['hps']['diff']
+            hps_sign = "+" if hps_diff > 0 else ""
+
+            heals_text += f"  시전: {heal['casts']['after']} ({casts_indicator}{abs(casts_diff)})"
+            heals_text += f" | HPS: {heal['hps']['after']:.1f} ({hps_sign}{hps_diff:.1f})\n"
+
+            # Avg Hit
+            if 'avg_hit' in heal and heal['avg_hit']['after'] > 0:
+                avg_diff_pct = (heal['avg_hit']['diff'] / heal['avg_hit']['before'] * 100) if heal['avg_hit']['before'] > 0 else 0
+                if abs(avg_diff_pct) > 1:
+                    avg_sign = "+" if avg_diff_pct > 0 else ""
+                    heals_text += f"  평균 힐: {heal['avg_hit']['after']:.0f} ({avg_sign}{avg_diff_pct:.1f}%)\n"
+
+            # Crit %
             crit_diff = heal['crit_percent']['diff']
+            if abs(crit_diff) > 0.5:
+                crit_sign = "+" if crit_diff > 0 else ""
+                heals_text += f"  치명타: {heal['crit_percent']['after']:.1f}% ({crit_sign}{crit_diff:.1f}%)\n"
 
-            hps_indicator = "⬆️" if hps_diff > 0 else "⬇️" if hps_diff < 0 else "➖"
-            casts_indicator = "⬆️" if casts_diff > 0 else "⬇️" if casts_diff < 0 else "➖"
-            crit_sign = "+" if crit_diff > 0 else ""
+            # Uptime (HoT 스킬)
+            if 'uptime_percent' in heal and (heal['uptime_percent']['after'] > 0 or heal['uptime_percent']['before'] > 0):
+                uptime_diff = heal['uptime_percent']['diff']
+                uptime_sign = "+" if uptime_diff > 0 else ""
+                uptime_indicator = "✓" if heal['uptime_percent']['after'] >= 80 else "⚠️"
+                heals_text += f"  {uptime_indicator} Uptime: {heal['uptime_percent']['after']:.1f}% ({uptime_sign}{uptime_diff:.1f}%)\n"
 
-            heals_text += f"**{heal['name']}**\n"
-            heals_text += f"  {hps_indicator} HPS: {heal['hps']['before']:.1f} → {heal['hps']['after']:.1f} ({hps_diff:+.1f})\n"
-            heals_text += f"  {casts_indicator} Casts: {heal['casts']['before']} → {heal['casts']['after']} ({casts_diff:+d})\n"
-            heals_text += f"  🎯 Crit: {heal['crit_percent']['before']:.1f}% → {heal['crit_percent']['after']:.1f}% ({crit_sign}{crit_diff:.1f}%)\n\n"
+            # Overheal
+            if 'overheal_percent' in heal and heal['overheal_percent']['after'] > 0:
+                overheal_diff = heal['overheal_percent']['diff']
+                overheal_sign = "+" if overheal_diff > 0 else ""
+                overheal_icon = "✓" if heal['overheal_percent']['after'] < 30 else "⚠️" if heal['overheal_percent']['after'] > 50 else "○"
+                heals_text += f"  {overheal_icon} 오버힐: {heal['overheal_percent']['after']:.1f}% ({overheal_sign}{overheal_diff:.1f}%)\n"
+
+            # 시전 효율성
+            if 'heal_per_cast' in heal and heal['heal_per_cast']['after'] > 0:
+                hpc_diff_pct = (heal['heal_per_cast']['diff'] / heal['heal_per_cast']['before'] * 100) if heal['heal_per_cast']['before'] > 0 else 0
+                if abs(hpc_diff_pct) > 5:
+                    hpc_sign = "+" if hpc_diff_pct > 0 else ""
+                    heals_text += f"  효율성: {heal['heal_per_cast']['after']:.0f}/cast ({hpc_sign}{hpc_diff_pct:.1f}%)\n"
+
+            heals_text += "\n"
 
         if heals_text:
-            embed.add_field(name="💊 주요 힐 스킬 비교", value=heals_text.strip(), inline=False)
+            embed.add_field(name="💊 주요 힐 스킬 상세", value=heals_text.strip(), inline=False)
 
 
 @bot.command(name='help_compare')
@@ -448,9 +568,9 @@ async def help_compare(ctx):
 
         embed.add_field(
             name="지원하는 역할",
-            value="⚔️ **DPS**: 총 DPS, 스킬 시전 횟수, 치명타율, DoT Uptime 비교\n"
-                  "🛡️ **탱커**: 받은 피해(DTPS), 피해 감소율, 회피율 비교\n"
-                  "💚 **힐러**: 총 HPS, 오버힐, 힐 스킬 사용 빈도, 치명타율 비교",
+            value="⚔️ **DPS**: 총 DPS/데미지, 스킬 기여도, 평균 피해, 시전 효율성, 치명타율, DoT Uptime\n"
+                  "🛡️ **탱커**: 받은 피해(DTPS), 피해 감소율, 회피율, 방어 스킬 유지율, 피해 소스 분석\n"
+                  "💚 **힐러**: 총 HPS/힐량, 힐 기여도, 평균 힐, 시전 효율성, 치명타율, HoT Uptime, 오버힐",
             inline=False
         )
 
@@ -475,9 +595,9 @@ Warcraftlogs CSV 파일 2개를 비교해서 퍼포먼스 차이를 분석합니
 4. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력
 
 **지원하는 역할:**
-⚔️ **DPS**: 총 DPS, 스킬 시전 횟수, 치명타율, DoT Uptime 비교
-🛡️ **탱커**: 받은 피해(DTPS), 피해 감소율, 회피율 비교
-💚 **힐러**: 총 HPS, 오버힐, 힐 스킬 사용 빈도, 치명타율 비교
+⚔️ **DPS**: 총 DPS/데미지, 스킬 기여도, 평균 피해, 시전 효율성, 치명타율, DoT Uptime
+🛡️ **탱커**: 받은 피해(DTPS), 피해 감소율, 회피율, 방어 스킬 유지율, 피해 소스 분석
+💚 **힐러**: 총 HPS/힐량, 힐 기여도, 평균 힐, 시전 효율성, 치명타율, HoT Uptime, 오버힐
 
 **명령어:**
 `!compare` - CSV 파일 2개 비교

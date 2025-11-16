@@ -88,7 +88,8 @@ class WowLogAnalyzer:
             'summary': {},
             'skills': [],
             'missing_skills': [],
-            'improvements': []
+            'improvements': [],
+            'top_contributors': []
         }
 
         # 총 DPS 비교
@@ -104,6 +105,41 @@ class WowLogAnalyzer:
             'diff_percent': dps_diff_percent
         }
 
+        # 총 데미지량 비교 (Amount)
+        if 'Amount' in self.df1.columns:
+            total_amount1 = sum(self.parse_amount(str(amt))[0] for amt in self.df1['Amount'])
+            total_amount2 = sum(self.parse_amount(str(amt))[0] for amt in self.df2['Amount'])
+            amount_diff = total_amount2 - total_amount1
+            amount_diff_percent = (amount_diff / total_amount1 * 100) if total_amount1 > 0 else 0
+
+            result['summary']['total_damage'] = {
+                'before': total_amount1,
+                'after': total_amount2,
+                'diff': amount_diff,
+                'diff_percent': amount_diff_percent
+            }
+
+        # 총 시전 수 비교
+        total_casts1 = self.df1['Casts'].sum() if 'Casts' in self.df1.columns else 0
+        total_casts2 = self.df2['Casts'].sum() if 'Casts' in self.df2.columns else 0
+
+        result['summary']['total_casts'] = {
+            'before': total_casts1,
+            'after': total_casts2,
+            'diff': total_casts2 - total_casts1
+        }
+
+        # 평균 치명타율
+        if 'Crit %' in self.df1.columns:
+            avg_crit1 = self.df1['Crit %'].apply(self.parse_percentage).mean()
+            avg_crit2 = self.df2['Crit %'].apply(self.parse_percentage).mean()
+
+            result['summary']['avg_crit'] = {
+                'before': avg_crit1,
+                'after': avg_crit2,
+                'diff': avg_crit2 - avg_crit1
+            }
+
         # 스킬별 비교
         skills1 = set(self.df1['Name'].tolist())
         skills2 = set(self.df2['Name'].tolist())
@@ -113,6 +149,10 @@ class WowLogAnalyzer:
         for skill in common_skills:
             skill_data1 = self.df1[self.df1['Name'] == skill].iloc[0]
             skill_data2 = self.df2[self.df2['Name'] == skill].iloc[0]
+
+            # Amount 파싱 (총량, 기여도%, M단위)
+            amount1, percent1, m1 = self.parse_amount(str(skill_data1.get('Amount', '0')))
+            amount2, percent2, m2 = self.parse_amount(str(skill_data2.get('Amount', '0')))
 
             # Casts 비교
             casts1 = skill_data1.get('Casts', 0)
@@ -126,12 +166,39 @@ class WowLogAnalyzer:
             uptime1 = self.parse_percentage(skill_data1.get('Uptime %', '0%'))
             uptime2 = self.parse_percentage(skill_data2.get('Uptime %', '0%'))
 
-            result['skills'].append({
+            # Avg Hit 비교
+            avg_hit1 = skill_data1.get('Avg Hit', 0)
+            avg_hit2 = skill_data2.get('Avg Hit', 0)
+
+            # Hits 비교
+            hits1 = skill_data1.get('Hits', 0)
+            hits2 = skill_data2.get('Hits', 0)
+
+            # 시전 효율성 (데미지 per Cast)
+            dpc1 = amount1 / casts1 if casts1 > 0 else 0
+            dpc2 = amount2 / casts2 if casts2 > 0 else 0
+
+            # 적중률
+            hit_rate1 = (hits1 / casts1 * 100) if casts1 > 0 else 0
+            hit_rate2 = (hits2 / casts2 * 100) if casts2 > 0 else 0
+
+            skill_info = {
                 'name': skill,
+                'amount': {'before': amount1, 'after': amount2, 'diff': amount2 - amount1},
+                'contribution_percent': {'before': percent1, 'after': percent2, 'diff': percent2 - percent1},
                 'casts': {'before': casts1, 'after': casts2, 'diff': casts2 - casts1},
                 'crit_percent': {'before': crit1, 'after': crit2, 'diff': crit2 - crit1},
-                'uptime_percent': {'before': uptime1, 'after': uptime2, 'diff': uptime2 - uptime1}
-            })
+                'uptime_percent': {'before': uptime1, 'after': uptime2, 'diff': uptime2 - uptime1},
+                'avg_hit': {'before': avg_hit1, 'after': avg_hit2, 'diff': avg_hit2 - avg_hit1},
+                'damage_per_cast': {'before': dpc1, 'after': dpc2, 'diff': dpc2 - dpc1},
+                'hit_rate': {'before': hit_rate1, 'after': hit_rate2, 'diff': hit_rate2 - hit_rate1}
+            }
+
+            result['skills'].append(skill_info)
+
+        # 상위 기여도 스킬 (After 기준)
+        top_skills = sorted(result['skills'], key=lambda x: x['contribution_percent']['after'], reverse=True)[:5]
+        result['top_contributors'] = [{'name': s['name'], 'percent': s['contribution_percent']['after']} for s in top_skills]
 
         # 누락된 스킬 확인
         missing_in_new = skills1 - skills2
@@ -142,6 +209,23 @@ class WowLogAnalyzer:
         if new_skills:
             result['improvements'].append(f"새로운 스킬 사용: {', '.join(new_skills)}")
 
+        # 개선 제안 생성
+        for skill in result['skills']:
+            # Uptime이 낮은 DoT 스킬
+            if skill['uptime_percent']['before'] > 0 or skill['uptime_percent']['after'] > 0:
+                if skill['uptime_percent']['after'] < 80 and skill['uptime_percent']['after'] > 0:
+                    result['improvements'].append(f"{skill['name']} DoT 유지율 향상 필요 ({skill['uptime_percent']['after']:.1f}%)")
+
+            # Casts가 크게 감소한 주요 스킬
+            if skill['contribution_percent']['before'] > 10 and skill['casts']['diff'] < -10:
+                result['improvements'].append(f"{skill['name']} 시전 횟수 감소 ({skill['casts']['diff']:+d})")
+
+            # 평균 피해가 크게 증가한 스킬
+            if skill['avg_hit']['diff'] > 0 and skill['avg_hit']['before'] > 0:
+                increase_pct = (skill['avg_hit']['diff'] / skill['avg_hit']['before']) * 100
+                if increase_pct > 20:
+                    result['improvements'].append(f"{skill['name']} 평균 피해 크게 증가 (+{increase_pct:.1f}%)")
+
         return result
 
     def compare_tank(self) -> Dict:
@@ -150,7 +234,8 @@ class WowLogAnalyzer:
             'role': 'TANK',
             'summary': {},
             'damage_sources': [],
-            'improvements': []
+            'improvements': [],
+            'mitigation_skills': []
         }
 
         # 총 받은 피해(DTPS) 비교
@@ -166,14 +251,32 @@ class WowLogAnalyzer:
             'diff_percent': dtps_diff_percent
         }
 
+        # 총 받은 피해량 비교 (Amount)
+        if 'Amount' in self.df1.columns:
+            total_damage1 = sum(self.parse_amount(str(amt))[0] for amt in self.df1['Amount'])
+            total_damage2 = sum(self.parse_amount(str(amt))[0] for amt in self.df2['Amount'])
+            damage_diff = total_damage2 - total_damage1
+            damage_diff_percent = (damage_diff / total_damage1 * 100) if total_damage1 > 0 else 0
+
+            result['summary']['total_damage_taken'] = {
+                'before': total_damage1,
+                'after': total_damage2,
+                'diff': damage_diff,
+                'diff_percent': damage_diff_percent
+            }
+
         # Mitigated 비교
         if 'Mitigated' in self.df1.columns:
             total_mitigated1 = self.df1['Mitigated'].sum()
             total_mitigated2 = self.df2['Mitigated'].sum()
+            mit_diff = total_mitigated2 - total_mitigated1
+            mit_diff_percent = (mit_diff / total_mitigated1 * 100) if total_mitigated1 > 0 else 0
+
             result['summary']['mitigated'] = {
                 'before': total_mitigated1,
                 'after': total_mitigated2,
-                'diff': total_mitigated2 - total_mitigated1
+                'diff': mit_diff,
+                'diff_percent': mit_diff_percent
             }
 
         # Miss % 평균 비교
@@ -186,6 +289,16 @@ class WowLogAnalyzer:
                 'diff': avg_miss2 - avg_miss1
             }
 
+        # 평균 Uptime (방어 버프 유지율)
+        if 'Uptime %' in self.df1.columns:
+            avg_uptime1 = self.df1['Uptime %'].apply(self.parse_percentage).mean()
+            avg_uptime2 = self.df2['Uptime %'].apply(self.parse_percentage).mean()
+            result['summary']['avg_uptime'] = {
+                'before': avg_uptime1,
+                'after': avg_uptime2,
+                'diff': avg_uptime2 - avg_uptime1
+            }
+
         # 주요 피해 소스별 비교
         sources1 = set(self.df1['Name'].tolist())
         sources2 = set(self.df2['Name'].tolist())
@@ -195,17 +308,59 @@ class WowLogAnalyzer:
             source_data1 = self.df1[self.df1['Name'] == source].iloc[0]
             source_data2 = self.df2[self.df2['Name'] == source].iloc[0]
 
+            # Amount 파싱
+            amount1, percent1, m1 = self.parse_amount(str(source_data1.get('Amount', '0')))
+            amount2, percent2, m2 = self.parse_amount(str(source_data2.get('Amount', '0')))
+
             dtps1 = source_data1.get('DTPS', 0)
             dtps2 = source_data2.get('DTPS', 0)
 
-            result['damage_sources'].append({
-                'name': source,
-                'dtps': {'before': dtps1, 'after': dtps2, 'diff': dtps2 - dtps1}
-            })
+            # Avg Hit
+            avg_hit1 = source_data1.get('Avg Hit', 0)
+            avg_hit2 = source_data2.get('Avg Hit', 0)
 
-        # 개선 제안
+            # Uptime % (방어 스킬 유지율)
+            uptime1 = self.parse_percentage(source_data1.get('Uptime %', '0%'))
+            uptime2 = self.parse_percentage(source_data2.get('Uptime %', '0%'))
+
+            # Miss %
+            miss1 = self.parse_percentage(source_data1.get('Miss %', '0%'))
+            miss2 = self.parse_percentage(source_data2.get('Miss %', '0%'))
+
+            source_info = {
+                'name': source,
+                'amount': {'before': amount1, 'after': amount2, 'diff': amount2 - amount1},
+                'contribution_percent': {'before': percent1, 'after': percent2, 'diff': percent2 - percent1},
+                'dtps': {'before': dtps1, 'after': dtps2, 'diff': dtps2 - dtps1},
+                'avg_hit': {'before': avg_hit1, 'after': avg_hit2, 'diff': avg_hit2 - avg_hit1},
+                'uptime_percent': {'before': uptime1, 'after': uptime2, 'diff': uptime2 - uptime1},
+                'miss_percent': {'before': miss1, 'after': miss2, 'diff': miss2 - miss1}
+            }
+
+            result['damage_sources'].append(source_info)
+
+            # 방어 스킬 (Uptime이 있는 것들)
+            if uptime1 > 0 or uptime2 > 0:
+                result['mitigation_skills'].append(source_info)
+
+        # 개선 제안 생성
         if dtps_diff < 0:
-            result['improvements'].append("받은 피해가 감소했습니다. 좋은 개선입니다!")
+            result['improvements'].append(f"받은 피해(DTPS) 감소: {dtps_diff:.1f} ({dtps_diff_percent:+.1f}%)")
+
+        if 'mitigated' in result['summary']:
+            mit_pct = result['summary']['mitigated']['diff_percent']
+            if mit_pct > 10:
+                result['improvements'].append(f"피해 감소량 크게 증가: +{mit_pct:.1f}%")
+
+        if 'avg_miss_percent' in result['summary']:
+            miss_diff = result['summary']['avg_miss_percent']['diff']
+            if miss_diff > 5:
+                result['improvements'].append(f"회피율 증가: +{miss_diff:.1f}%")
+
+        # Uptime 낮은 방어 스킬 체크
+        for skill in result['mitigation_skills']:
+            if skill['uptime_percent']['after'] < 50 and skill['uptime_percent']['after'] > 0:
+                result['improvements'].append(f"{skill['name']} 유지율 향상 필요 ({skill['uptime_percent']['after']:.1f}%)")
 
         return result
 
@@ -215,7 +370,8 @@ class WowLogAnalyzer:
             'role': 'HEALER',
             'summary': {},
             'heals': [],
-            'improvements': []
+            'improvements': [],
+            'top_contributors': []
         }
 
         # 총 HPS 비교
@@ -230,6 +386,41 @@ class WowLogAnalyzer:
             'diff': hps_diff,
             'diff_percent': hps_diff_percent
         }
+
+        # 총 힐량 비교 (Amount)
+        if 'Amount' in self.df1.columns:
+            total_heal1 = sum(self.parse_amount(str(amt))[0] for amt in self.df1['Amount'])
+            total_heal2 = sum(self.parse_amount(str(amt))[0] for amt in self.df2['Amount'])
+            heal_diff = total_heal2 - total_heal1
+            heal_diff_percent = (heal_diff / total_heal1 * 100) if total_heal1 > 0 else 0
+
+            result['summary']['total_healing'] = {
+                'before': total_heal1,
+                'after': total_heal2,
+                'diff': heal_diff,
+                'diff_percent': heal_diff_percent
+            }
+
+        # 총 시전 수 비교
+        total_casts1 = self.df1['Casts'].sum() if 'Casts' in self.df1.columns else 0
+        total_casts2 = self.df2['Casts'].sum() if 'Casts' in self.df2.columns else 0
+
+        result['summary']['total_casts'] = {
+            'before': total_casts1,
+            'after': total_casts2,
+            'diff': total_casts2 - total_casts1
+        }
+
+        # 평균 치명타율
+        if 'Crit %' in self.df1.columns:
+            avg_crit1 = self.df1['Crit %'].apply(self.parse_percentage).mean()
+            avg_crit2 = self.df2['Crit %'].apply(self.parse_percentage).mean()
+
+            result['summary']['avg_crit'] = {
+                'before': avg_crit1,
+                'after': avg_crit2,
+                'diff': avg_crit2 - avg_crit1
+            }
 
         # Overheal % 평균 비교
         if 'Overheal' in self.df1.columns:
@@ -251,6 +442,10 @@ class WowLogAnalyzer:
             heal_data1 = self.df1[self.df1['Name'] == heal].iloc[0]
             heal_data2 = self.df2[self.df2['Name'] == heal].iloc[0]
 
+            # Amount 파싱 (총량, 기여도%, M단위)
+            amount1, percent1, m1 = self.parse_amount(str(heal_data1.get('Amount', '0')))
+            amount2, percent2, m2 = self.parse_amount(str(heal_data2.get('Amount', '0')))
+
             # Casts 비교
             casts1 = heal_data1.get('Casts', 0)
             casts2 = heal_data2.get('Casts', 0)
@@ -263,16 +458,74 @@ class WowLogAnalyzer:
             hps1 = heal_data1.get('HPS', 0)
             hps2 = heal_data2.get('HPS', 0)
 
-            result['heals'].append({
+            # Avg Hit 비교
+            avg_hit1 = heal_data1.get('Avg Hit', 0)
+            avg_hit2 = heal_data2.get('Avg Hit', 0)
+
+            # Hits 비교
+            hits1 = heal_data1.get('Hits', 0)
+            hits2 = heal_data2.get('Hits', 0)
+
+            # Uptime % (HoT 힐 유지율)
+            uptime1 = self.parse_percentage(heal_data1.get('Uptime %', '0%'))
+            uptime2 = self.parse_percentage(heal_data2.get('Uptime %', '0%'))
+
+            # Overheal 비교
+            overheal1 = self.parse_percentage(str(heal_data1.get('Overheal', '0%'))) if isinstance(heal_data1.get('Overheal', 0), str) else heal_data1.get('Overheal', 0)
+            overheal2 = self.parse_percentage(str(heal_data2.get('Overheal', '0%'))) if isinstance(heal_data2.get('Overheal', 0), str) else heal_data2.get('Overheal', 0)
+
+            # 시전 효율성 (힐량 per Cast)
+            hpc1 = amount1 / casts1 if casts1 > 0 else 0
+            hpc2 = amount2 / casts2 if casts2 > 0 else 0
+
+            heal_info = {
                 'name': heal,
+                'amount': {'before': amount1, 'after': amount2, 'diff': amount2 - amount1},
+                'contribution_percent': {'before': percent1, 'after': percent2, 'diff': percent2 - percent1},
                 'casts': {'before': casts1, 'after': casts2, 'diff': casts2 - casts1},
                 'crit_percent': {'before': crit1, 'after': crit2, 'diff': crit2 - crit1},
-                'hps': {'before': hps1, 'after': hps2, 'diff': hps2 - hps1}
-            })
+                'hps': {'before': hps1, 'after': hps2, 'diff': hps2 - hps1},
+                'avg_hit': {'before': avg_hit1, 'after': avg_hit2, 'diff': avg_hit2 - avg_hit1},
+                'uptime_percent': {'before': uptime1, 'after': uptime2, 'diff': uptime2 - uptime1},
+                'overheal_percent': {'before': overheal1, 'after': overheal2, 'diff': overheal2 - overheal1},
+                'heal_per_cast': {'before': hpc1, 'after': hpc2, 'diff': hpc2 - hpc1}
+            }
 
-        # 개선 제안
-        if avg_overheal2 < avg_overheal1:
-            result['improvements'].append("오버힐이 감소했습니다. 효율적인 힐링입니다!")
+            result['heals'].append(heal_info)
+
+        # 상위 기여도 힐 스킬 (After 기준)
+        top_heals = sorted(result['heals'], key=lambda x: x['contribution_percent']['after'], reverse=True)[:5]
+        result['top_contributors'] = [{'name': h['name'], 'percent': h['contribution_percent']['after']} for h in top_heals]
+
+        # 개선 제안 생성
+        if hps_diff > 0:
+            result['improvements'].append(f"HPS 증가: +{hps_diff:.1f} (+{hps_diff_percent:.1f}%)")
+
+        if 'avg_overheal_percent' in result['summary']:
+            overheal_diff = result['summary']['avg_overheal_percent']['diff']
+            if overheal_diff < -5:
+                result['improvements'].append(f"오버힐 감소: {overheal_diff:.1f}% (효율적인 힐링)")
+            elif overheal_diff > 10:
+                result['improvements'].append(f"오버힐 증가: +{overheal_diff:.1f}% (낭비 주의)")
+
+        # HoT 유지율 체크
+        for heal in result['heals']:
+            if heal['uptime_percent']['before'] > 0 or heal['uptime_percent']['after'] > 0:
+                if heal['uptime_percent']['after'] < 80 and heal['uptime_percent']['after'] > 0:
+                    result['improvements'].append(f"{heal['name']} HoT 유지율 향상 필요 ({heal['uptime_percent']['after']:.1f}%)")
+
+        # 평균 치명타율 개선
+        if 'avg_crit' in result['summary']:
+            crit_diff = result['summary']['avg_crit']['diff']
+            if crit_diff > 5:
+                result['improvements'].append(f"평균 치명타율 증가: +{crit_diff:.1f}%")
+
+        # 효율성 개선 체크
+        for heal in result['heals']:
+            if heal['heal_per_cast']['before'] > 0:
+                efficiency_change = (heal['heal_per_cast']['diff'] / heal['heal_per_cast']['before']) * 100
+                if efficiency_change > 20 and heal['contribution_percent']['after'] > 5:
+                    result['improvements'].append(f"{heal['name']} 시전 효율성 크게 증가 (+{efficiency_change:.1f}%)")
 
         return result
 
