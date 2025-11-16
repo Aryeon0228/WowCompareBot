@@ -102,7 +102,8 @@ class WowLogAnalyzer:
             'summary': {},
             'skills': [],
             'missing_skills': [],
-            'improvements': []
+            'improvements': [],
+            'advice': []  # 서술형 조언
         }
 
         # 총 DPS 비교
@@ -156,7 +157,58 @@ class WowLogAnalyzer:
         if new_skills:
             result['improvements'].append(f"새로운 스킬 사용: {', '.join(new_skills)}")
 
+        # 서술형 조언 생성
+        self._generate_dps_advice(result)
+
         return result
+
+    def _generate_dps_advice(self, result: Dict):
+        """DPS에 대한 서술형 조언을 생성합니다"""
+        advice = []
+        summary = result.get('summary', {})
+
+        # 총 DPS 차이에 대한 조언
+        if 'total_dps' in summary:
+            dps_diff_percent = summary['total_dps']['diff_percent']
+            dps_diff = summary['total_dps']['diff']
+
+            if dps_diff_percent > 10:
+                advice.append(f"목표 캐릭터 대비 {abs(dps_diff_percent):.1f}% 더 높은 DPS를 기록했습니다! 훌륭한 향상입니다. 현재 사용 중인 로테이션과 스킬 우선순위를 유지하세요.")
+            elif dps_diff_percent > 0:
+                advice.append(f"목표 캐릭터보다 {dps_diff_percent:.1f}% 향상되었습니다. 꾸준히 개선되고 있네요!")
+            elif dps_diff_percent > -10:
+                advice.append(f"목표 캐릭터보다 {abs(dps_diff_percent):.1f}% 낮은 DPS를 기록했습니다. 스킬 우선순위와 로테이션을 다시 점검해보세요.")
+            else:
+                advice.append(f"목표 캐릭터 대비 {abs(dps_diff_percent):.1f}% 낮은 수치입니다. 아래 스킬 사용 패턴을 면밀히 비교하여 개선점을 찾아보세요.")
+
+        # 스킬 사용 패턴 분석
+        skills = result.get('skills', [])
+        if skills:
+            # Casts가 많이 감소한 스킬
+            decreased_casts = [s for s in skills if s['casts']['diff'] < -5]
+            if decreased_casts:
+                skill_names = [s['name'] for s in decreased_casts[:3]]
+                advice.append(f"{', '.join(skill_names)} 스킬의 사용 빈도가 감소했습니다. 이 스킬들을 로테이션에서 놓치고 있지 않은지 확인하세요.")
+
+            # Crit 확률이 개선된 스킬
+            improved_crit = [s for s in skills if s['crit_percent']['diff'] > 5]
+            if improved_crit:
+                skill_names = [s['name'] for s in improved_crit[:2]]
+                advice.append(f"{', '.join(skill_names)} 스킬의 치명타율이 향상되었습니다. 좋은 장비 개선 또는 버프 활용입니다!")
+
+            # Uptime이 중요한 DoT 스킬 분석
+            dot_skills = [s for s in skills if s['uptime_percent']['before'] > 0 or s['uptime_percent']['after'] > 0]
+            low_uptime = [s for s in dot_skills if s['uptime_percent']['after'] < 80 and s['uptime_percent']['diff'] < 0]
+            if low_uptime:
+                skill_names = [s['name'] for s in low_uptime[:2]]
+                advice.append(f"{', '.join(skill_names)}의 Uptime이 감소했습니다. DoT/버프 유지율을 높이기 위해 타이머를 활용하거나 갱신 시점을 개선하세요.")
+
+        # 누락된 스킬에 대한 조언
+        missing_skills = result.get('missing_skills', [])
+        if missing_skills:
+            advice.append(f"목표 캐릭터가 사용한 {', '.join(missing_skills[:3])} 스킬을 사용하지 않았습니다. 이 스킬들이 로테이션에 포함되어야 하는지 확인하세요.")
+
+        result['advice'] = advice
 
     def compare_tank(self) -> Dict:
         """탱커 역할의 두 CSV를 비교합니다"""
@@ -164,7 +216,8 @@ class WowLogAnalyzer:
             'role': 'TANK',
             'summary': {},
             'damage_sources': [],
-            'improvements': []
+            'improvements': [],
+            'advice': []  # 서술형 조언
         }
 
         # 총 받은 피해(DTPS) 비교
@@ -221,7 +274,56 @@ class WowLogAnalyzer:
         if dtps_diff < 0:
             result['improvements'].append("받은 피해가 감소했습니다. 좋은 개선입니다!")
 
+        # 서술형 조언 생성
+        self._generate_tank_advice(result)
+
         return result
+
+    def _generate_tank_advice(self, result: Dict):
+        """탱커에 대한 서술형 조언을 생성합니다"""
+        advice = []
+        summary = result.get('summary', {})
+
+        # 총 DTPS 차이에 대한 조언
+        if 'total_dtps' in summary:
+            dtps_diff_percent = summary['total_dtps']['diff_percent']
+            dtps_diff = summary['total_dtps']['diff']
+
+            if dtps_diff_percent < -10:
+                advice.append(f"목표 캐릭터 대비 받은 피해가 {abs(dtps_diff_percent):.1f}% 감소했습니다! 훌륭한 생존력 향상입니다. 현재 방어 스킬 사용 패턴을 유지하세요.")
+            elif dtps_diff_percent < 0:
+                advice.append(f"목표 캐릭터보다 {abs(dtps_diff_percent):.1f}% 적은 피해를 받았습니다. 좋은 개선입니다!")
+            elif dtps_diff_percent < 10:
+                advice.append(f"목표 캐릭터보다 {dtps_diff_percent:.1f}% 더 많은 피해를 받았습니다. 방어 스킬 사용 타이밍을 개선해보세요.")
+            else:
+                advice.append(f"목표 캐릭터 대비 {dtps_diff_percent:.1f}% 더 많은 피해를 받았습니다. 피해 감소 스킬의 적극적인 활용과 위치 선정을 점검하세요.")
+
+        # Mitigated 분석
+        if 'mitigated' in summary:
+            mit_diff = summary['mitigated']['diff']
+            if mit_diff > 0:
+                advice.append(f"피해 감소량이 증가했습니다. 방어 쿨다운을 효과적으로 사용하고 있습니다!")
+            elif mit_diff < 0:
+                advice.append(f"피해 감소량이 감소했습니다. 방어 쿨다운(블록, 회피, 피해감소 버프 등)을 더 자주 사용하세요.")
+
+        # Miss % 분석
+        if 'avg_miss_percent' in summary:
+            miss_diff = summary['avg_miss_percent']['diff']
+            miss_after = summary['avg_miss_percent']['after']
+            if miss_diff > 2:
+                advice.append(f"회피율이 {miss_diff:.1f}% 향상되었습니다. 회피/무기막기 스탯이나 스킬 활용이 개선되었네요!")
+            elif miss_after < 10:
+                advice.append(f"현재 회피율이 {miss_after:.1f}%로 낮습니다. 회피/무기막기 관련 스킬과 장비를 점검해보세요.")
+
+        # 피해 소스 분석
+        damage_sources = result.get('damage_sources', [])
+        if damage_sources:
+            increased_sources = [s for s in damage_sources if s['dtps']['diff'] > 100]
+            if increased_sources:
+                source_names = [s['name'] for s in increased_sources[:3]]
+                advice.append(f"{', '.join(source_names)}로부터 받은 피해가 크게 증가했습니다. 이 공격 패턴에 맞는 방어 스킬을 사용하거나 위치를 조정하세요.")
+
+        result['advice'] = advice
 
     def compare_healer(self) -> Dict:
         """힐러 역할의 두 CSV를 비교합니다"""
@@ -229,7 +331,8 @@ class WowLogAnalyzer:
             'role': 'HEALER',
             'summary': {},
             'heals': [],
-            'improvements': []
+            'improvements': [],
+            'advice': []  # 서술형 조언
         }
 
         # 총 HPS 비교
@@ -290,7 +393,66 @@ class WowLogAnalyzer:
         if avg_overheal2 < avg_overheal1:
             result['improvements'].append("오버힐이 감소했습니다. 효율적인 힐링입니다!")
 
+        # 서술형 조언 생성
+        self._generate_healer_advice(result)
+
         return result
+
+    def _generate_healer_advice(self, result: Dict):
+        """힐러에 대한 서술형 조언을 생성합니다"""
+        advice = []
+        summary = result.get('summary', {})
+
+        # 총 HPS 차이에 대한 조언
+        if 'total_hps' in summary:
+            hps_diff_percent = summary['total_hps']['diff_percent']
+            hps_diff = summary['total_hps']['diff']
+
+            if hps_diff_percent > 10:
+                advice.append(f"목표 캐릭터 대비 {hps_diff_percent:.1f}% 더 높은 HPS를 기록했습니다! 훌륭한 힐링 성능입니다. 다만 오버힐 수치를 확인하여 불필요한 힐이 없는지 체크하세요.")
+            elif hps_diff_percent > 0:
+                advice.append(f"목표 캐릭터보다 {hps_diff_percent:.1f}% 향상된 힐링량입니다. 좋은 개선입니다!")
+            elif hps_diff_percent > -10:
+                advice.append(f"목표 캐릭터보다 {abs(hps_diff_percent):.1f}% 낮은 힐링량입니다. 힐 스킬 사용 빈도와 타이밍을 개선해보세요.")
+            else:
+                advice.append(f"목표 캐릭터 대비 {abs(hps_diff_percent):.1f}% 낮은 힐링량입니다. 마나 관리와 힐 우선순위를 재점검하세요.")
+
+        # Overheal % 분석
+        if 'avg_overheal_percent' in summary:
+            overheal_diff = summary['avg_overheal_percent']['diff']
+            overheal_after = summary['avg_overheal_percent']['after']
+
+            if overheal_after > 40:
+                advice.append(f"오버힐이 {overheal_after:.1f}%로 높습니다. 체력이 이미 충분한 대상을 힐하고 있을 수 있습니다. 힐 타겟 우선순위를 조정하여 마나 효율을 높이세요.")
+            elif overheal_diff < -5:
+                advice.append(f"오버힐이 {abs(overheal_diff):.1f}% 감소했습니다. 효율적인 힐링으로 개선되었네요!")
+            elif overheal_diff > 5:
+                advice.append(f"오버힐이 {overheal_diff:.1f}% 증가했습니다. 불필요한 힐을 줄이고 마나 효율을 개선하세요.")
+
+        # 힐 스킬 사용 패턴 분석
+        heals = result.get('heals', [])
+        if heals:
+            # HPS가 크게 감소한 스킬
+            decreased_hps = [h for h in heals if h['hps']['diff'] < -100]
+            if decreased_hps:
+                skill_names = [h['name'] for h in decreased_hps[:3]]
+                advice.append(f"{', '.join(skill_names)} 스킬의 사용이 감소했습니다. 이 스킬들을 로테이션에 더 자주 포함시켜보세요.")
+
+            # Crit 확률이 개선된 스킬
+            improved_crit = [h for h in heals if h['crit_percent']['diff'] > 5]
+            if improved_crit:
+                skill_names = [h['name'] for h in improved_crit[:2]]
+                advice.append(f"{', '.join(skill_names)} 스킬의 치명타율이 향상되었습니다. 좋은 장비 개선입니다!")
+
+            # Casts가 많이 증가한 스킬
+            increased_casts = [h for h in heals if h['casts']['diff'] > 10]
+            if increased_casts:
+                skill_names = [h['name'] for h in increased_casts[:2]]
+                # 오버힐이 높으면 경고
+                if overheal_after > 35:
+                    advice.append(f"{', '.join(skill_names)} 스킬 사용이 증가했지만 오버힐이 높습니다. 힐 타이밍을 조정하세요.")
+
+        result['advice'] = advice
 
     def analyze(self) -> Optional[Dict]:
         """전체 분석을 수행합니다"""
