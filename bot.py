@@ -283,7 +283,7 @@ def create_comparison_graph(result: dict, file1_name: str, file2_name: str) -> s
         summary = result.get('summary', {})
         if 'total_dps' in summary:
             dps_data = summary['total_dps']
-            categories = [f'🎯 {char1_name}', f'👤 {char2_name}']
+            categories = [f'Target: {char1_name}', f'Me: {char2_name}']
             values = [dps_data['before'], dps_data['after']]
 
             colors = ['#FF6B6B', '#4ECDC4']
@@ -313,7 +313,7 @@ def create_comparison_graph(result: dict, file1_name: str, file2_name: str) -> s
         summary = result.get('summary', {})
         if 'total_dtps' in summary:
             dtps_data = summary['total_dtps']
-            categories = [f'🎯 {char1_name}', f'👤 {char2_name}']
+            categories = [f'Target: {char1_name}', f'Me: {char2_name}']
             values = [dtps_data['before'], dtps_data['after']]
 
             # DTPS는 낮을수록 좋으므로 색상 반전
@@ -344,7 +344,7 @@ def create_comparison_graph(result: dict, file1_name: str, file2_name: str) -> s
         summary = result.get('summary', {})
         if 'total_hps' in summary:
             hps_data = summary['total_hps']
-            categories = [f'🎯 {char1_name}', f'👤 {char2_name}']
+            categories = [f'Target: {char1_name}', f'Me: {char2_name}']
             values = [hps_data['before'], hps_data['after']]
 
             colors = ['#FF6B6B', '#4ECDC4']
