@@ -2,6 +2,10 @@ import discord
 from discord.ext import commands
 import os
 import asyncio
+import matplotlib
+matplotlib.use('Agg')  # GUI 없이 이미지 생성
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 from analyzer import WowLogAnalyzer
 from config import DISCORD_TOKEN, COMMAND_PREFIX, COLOR_GREEN, COLOR_RED, COLOR_BLUE
 
@@ -143,11 +147,36 @@ async def compare(ctx):
 
         # 결과를 Embed로 출력
         embed = create_embed(result, csv_files[0].filename, csv_files[1].filename)
+
+        # 그래프 생성
+        graph_path = None
+        try:
+            graph_path = create_comparison_graph(result, csv_files[0].filename, csv_files[1].filename)
+        except Exception as e:
+            print(f"[WARNING] Graph creation failed: {e}")
+
         try:
             await status_msg.edit(content="✅ 분석 완료!")
         except discord.Forbidden:
             print(f"[ERROR] Cannot edit message in channel {ctx.channel.id}")
-        await safe_send_embed(ctx, embed, fallback_message="분석이 완료되었지만 Embed 권한이 없어 결과를 표시할 수 없습니다.")
+
+        # Embed와 그래프 전송
+        try:
+            if graph_path and os.path.exists(graph_path):
+                file = discord.File(graph_path, filename="comparison_graph.png")
+                embed.set_image(url="attachment://comparison_graph.png")
+                await ctx.send(embed=embed, file=file)
+            else:
+                await safe_send_embed(ctx, embed, fallback_message="분석이 완료되었지만 Embed 권한이 없어 결과를 표시할 수 없습니다.")
+        except discord.Forbidden:
+            await safe_send_embed(ctx, embed, fallback_message="분석이 완료되었지만 Embed 권한이 없어 결과를 표시할 수 없습니다.")
+        finally:
+            # 그래프 파일 삭제
+            if graph_path and os.path.exists(graph_path):
+                try:
+                    os.remove(graph_path)
+                except:
+                    pass
 
     except Exception as e:
         try:
@@ -161,6 +190,118 @@ async def compare(ctx):
             os.remove(file2_path)
         except:
             pass
+
+
+def create_comparison_graph(result: dict, file1_name: str, file2_name: str) -> str:
+    """비교 그래프를 생성하고 파일 경로를 반환합니다"""
+    role = result.get('role', 'UNKNOWN')
+
+    # 한글 폰트 설정 (시스템에 따라 다를 수 있음)
+    plt.rcParams['font.family'] = 'DejaVu Sans'
+    plt.rcParams['axes.unicode_minus'] = False
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    if role == 'DPS':
+        # DPS 그래프: 총 DPS 비교
+        summary = result.get('summary', {})
+        if 'total_dps' in summary:
+            dps_data = summary['total_dps']
+            categories = ['Target', 'You']
+            values = [dps_data['before'], dps_data['after']]
+
+            colors = ['#FF6B6B', '#4ECDC4']
+            bars = ax.bar(categories, values, color=colors, alpha=0.8, edgecolor='black', linewidth=1.5)
+
+            ax.set_ylabel('DPS', fontsize=14, fontweight='bold')
+            ax.set_title('Total DPS Comparison', fontsize=16, fontweight='bold', pad=20)
+            ax.grid(axis='y', alpha=0.3, linestyle='--')
+
+            # 값 표시
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'{height:.1f}',
+                       ha='center', va='bottom', fontsize=12, fontweight='bold')
+
+            # 차이 표시
+            diff_percent = dps_data['diff_percent']
+            diff_text = f"Difference: {diff_percent:+.1f}%"
+            color = 'green' if diff_percent > 0 else 'red' if diff_percent < 0 else 'gray'
+            ax.text(0.5, 0.95, diff_text, transform=ax.transAxes,
+                   fontsize=13, ha='center', va='top',
+                   bbox=dict(boxstyle='round', facecolor=color, alpha=0.3))
+
+    elif role == 'TANK':
+        # 탱커 그래프: DTPS 비교
+        summary = result.get('summary', {})
+        if 'total_dtps' in summary:
+            dtps_data = summary['total_dtps']
+            categories = ['Target', 'You']
+            values = [dtps_data['before'], dtps_data['after']]
+
+            # DTPS는 낮을수록 좋으므로 색상 반전
+            colors = ['#FF6B6B', '#4ECDC4'] if dtps_data['diff'] < 0 else ['#4ECDC4', '#FF6B6B']
+            bars = ax.bar(categories, values, color=colors, alpha=0.8, edgecolor='black', linewidth=1.5)
+
+            ax.set_ylabel('DTPS (Damage Taken)', fontsize=14, fontweight='bold')
+            ax.set_title('Damage Taken Comparison (Lower is Better)', fontsize=16, fontweight='bold', pad=20)
+            ax.grid(axis='y', alpha=0.3, linestyle='--')
+
+            # 값 표시
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'{height:.1f}',
+                       ha='center', va='bottom', fontsize=12, fontweight='bold')
+
+            # 차이 표시 (탱커는 감소가 좋음)
+            diff_percent = dtps_data['diff_percent']
+            diff_text = f"Difference: {diff_percent:+.1f}%"
+            color = 'green' if diff_percent < 0 else 'red' if diff_percent > 0 else 'gray'
+            ax.text(0.5, 0.95, diff_text, transform=ax.transAxes,
+                   fontsize=13, ha='center', va='top',
+                   bbox=dict(boxstyle='round', facecolor=color, alpha=0.3))
+
+    elif role == 'HEALER':
+        # 힐러 그래프: HPS 비교
+        summary = result.get('summary', {})
+        if 'total_hps' in summary:
+            hps_data = summary['total_hps']
+            categories = ['Target', 'You']
+            values = [hps_data['before'], hps_data['after']]
+
+            colors = ['#FF6B6B', '#4ECDC4']
+            bars = ax.bar(categories, values, color=colors, alpha=0.8, edgecolor='black', linewidth=1.5)
+
+            ax.set_ylabel('HPS', fontsize=14, fontweight='bold')
+            ax.set_title('Total HPS Comparison', fontsize=16, fontweight='bold', pad=20)
+            ax.grid(axis='y', alpha=0.3, linestyle='--')
+
+            # 값 표시
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2., height,
+                       f'{height:.1f}',
+                       ha='center', va='bottom', fontsize=12, fontweight='bold')
+
+            # 차이 표시
+            diff_percent = hps_data['diff_percent']
+            diff_text = f"Difference: {diff_percent:+.1f}%"
+            color = 'green' if diff_percent > 0 else 'red' if diff_percent < 0 else 'gray'
+            ax.text(0.5, 0.95, diff_text, transform=ax.transAxes,
+                   fontsize=13, ha='center', va='top',
+                   bbox=dict(boxstyle='round', facecolor=color, alpha=0.3))
+
+    plt.tight_layout()
+
+    # 파일 저장
+    graph_path = 'temp_csvs/comparison_graph.png'
+    os.makedirs('temp_csvs', exist_ok=True)
+    plt.savefig(graph_path, dpi=100, bbox_inches='tight', facecolor='white')
+    plt.close()
+
+    return graph_path
 
 
 def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embed:
@@ -204,6 +345,11 @@ def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embe
     if result.get('missing_skills'):
         missing_text = ', '.join(result['missing_skills'])
         embed.add_field(name="⚠️ 사용하지 않은 스킬", value=missing_text, inline=False)
+
+    # 서술형 조언
+    if result.get('advice'):
+        advice_text = '\n\n'.join([f"• {adv}" for adv in result['advice']])
+        embed.add_field(name="📝 상세 조언", value=advice_text, inline=False)
 
     embed.set_footer(text="WoW Compare Bot | Powered by Warcraftlogs")
     return embed
@@ -403,9 +549,10 @@ async def help_compare(ctx):
     embed.add_field(
         name="사용 방법",
         value="1. Warcraftlogs에서 CSV 파일 2개를 다운로드\n"
-              "2. 디스코드에 두 파일을 첨부\n"
-              "3. `!compare` 명령어 입력\n"
-              "4. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력",
+              "2. 디스코드에 **비교하고 싶은 목표 캐릭터의 CSV를 먼저** 첨부\n"
+              "3. **내 캐릭터의 CSV를 두 번째로** 첨부\n"
+              "4. `!compare` 명령어 입력\n"
+              "5. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력",
         inline=False
     )
 
@@ -429,9 +576,10 @@ async def help_compare(ctx):
         "📖 **WoW Compare Bot 사용법**\n\n"
         "**사용 방법:**\n"
         "1. Warcraftlogs에서 CSV 파일 2개를 다운로드\n"
-        "2. 디스코드에 두 파일을 첨부\n"
-        "3. `!compare` 명령어 입력\n"
-        "4. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력\n\n"
+        "2. 디스코드에 **비교하고 싶은 목표 캐릭터의 CSV를 먼저** 첨부\n"
+        "3. **내 캐릭터의 CSV를 두 번째로** 첨부\n"
+        "4. `!compare` 명령어 입력\n"
+        "5. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력\n\n"
         "**지원하는 역할:**\n"
         "⚔️ DPS: 총 DPS, 스킬 시전 횟수, 치명타율, DoT Uptime 비교\n"
         "🛡️ 탱커: 받은 피해(DTPS), 피해 감소율, 회피율 비교\n"
