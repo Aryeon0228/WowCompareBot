@@ -81,6 +81,20 @@ class WowLogAnalyzer:
         except:
             return 0.0
 
+    def parse_number(self, value) -> float:
+        """일반 숫자 값을 파싱합니다 (문자열을 float로 변환)"""
+        if pd.isna(value) or value == '':
+            return 0.0
+
+        try:
+            # 이미 숫자면 그대로 반환
+            if isinstance(value, (int, float)):
+                return float(value)
+            # 문자열이면 변환
+            return float(str(value).replace(',', ''))
+        except:
+            return 0.0
+
     def compare_dps(self) -> Dict:
         """DPS 역할의 두 CSV를 비교합니다"""
         result = {
@@ -92,8 +106,8 @@ class WowLogAnalyzer:
         }
 
         # 총 DPS 비교
-        total_dps1 = self.df1['DPS'].sum() if 'DPS' in self.df1.columns else 0
-        total_dps2 = self.df2['DPS'].sum() if 'DPS' in self.df2.columns else 0
+        total_dps1 = self.df1['DPS'].apply(self.parse_number).sum() if 'DPS' in self.df1.columns else 0
+        total_dps2 = self.df2['DPS'].apply(self.parse_number).sum() if 'DPS' in self.df2.columns else 0
         dps_diff = total_dps2 - total_dps1
         dps_diff_percent = (dps_diff / total_dps1 * 100) if total_dps1 > 0 else 0
 
@@ -115,8 +129,8 @@ class WowLogAnalyzer:
             skill_data2 = self.df2[self.df2['Name'] == skill].iloc[0]
 
             # Casts 비교
-            casts1 = skill_data1.get('Casts', 0)
-            casts2 = skill_data2.get('Casts', 0)
+            casts1 = int(self.parse_number(skill_data1.get('Casts', 0)))
+            casts2 = int(self.parse_number(skill_data2.get('Casts', 0)))
 
             # Crit % 비교
             crit1 = self.parse_percentage(skill_data1.get('Crit %', '0%'))
@@ -154,8 +168,8 @@ class WowLogAnalyzer:
         }
 
         # 총 받은 피해(DTPS) 비교
-        total_dtps1 = self.df1['DTPS'].sum() if 'DTPS' in self.df1.columns else 0
-        total_dtps2 = self.df2['DTPS'].sum() if 'DTPS' in self.df2.columns else 0
+        total_dtps1 = self.df1['DTPS'].apply(self.parse_number).sum() if 'DTPS' in self.df1.columns else 0
+        total_dtps2 = self.df2['DTPS'].apply(self.parse_number).sum() if 'DTPS' in self.df2.columns else 0
         dtps_diff = total_dtps2 - total_dtps1
         dtps_diff_percent = (dtps_diff / total_dtps1 * 100) if total_dtps1 > 0 else 0
 
@@ -168,8 +182,8 @@ class WowLogAnalyzer:
 
         # Mitigated 비교
         if 'Mitigated' in self.df1.columns:
-            total_mitigated1 = self.df1['Mitigated'].sum()
-            total_mitigated2 = self.df2['Mitigated'].sum()
+            total_mitigated1 = self.df1['Mitigated'].apply(self.parse_number).sum()
+            total_mitigated2 = self.df2['Mitigated'].apply(self.parse_number).sum()
             result['summary']['mitigated'] = {
                 'before': total_mitigated1,
                 'after': total_mitigated2,
@@ -195,8 +209,8 @@ class WowLogAnalyzer:
             source_data1 = self.df1[self.df1['Name'] == source].iloc[0]
             source_data2 = self.df2[self.df2['Name'] == source].iloc[0]
 
-            dtps1 = source_data1.get('DTPS', 0)
-            dtps2 = source_data2.get('DTPS', 0)
+            dtps1 = self.parse_number(source_data1.get('DTPS', 0))
+            dtps2 = self.parse_number(source_data2.get('DTPS', 0))
 
             result['damage_sources'].append({
                 'name': source,
@@ -219,8 +233,8 @@ class WowLogAnalyzer:
         }
 
         # 총 HPS 비교
-        total_hps1 = self.df1['HPS'].sum() if 'HPS' in self.df1.columns else 0
-        total_hps2 = self.df2['HPS'].sum() if 'HPS' in self.df2.columns else 0
+        total_hps1 = self.df1['HPS'].apply(self.parse_number).sum() if 'HPS' in self.df1.columns else 0
+        total_hps2 = self.df2['HPS'].apply(self.parse_number).sum() if 'HPS' in self.df2.columns else 0
         hps_diff = total_hps2 - total_hps1
         hps_diff_percent = (hps_diff / total_hps1 * 100) if total_hps1 > 0 else 0
 
@@ -232,10 +246,12 @@ class WowLogAnalyzer:
         }
 
         # Overheal % 평균 비교
+        avg_overheal1 = 0
+        avg_overheal2 = 0
         if 'Overheal' in self.df1.columns:
             # Overheal은 퍼센트 형식일 수 있음
-            avg_overheal1 = self.df1['Overheal'].apply(lambda x: self.parse_percentage(x) if isinstance(x, str) else x).mean()
-            avg_overheal2 = self.df2['Overheal'].apply(lambda x: self.parse_percentage(x) if isinstance(x, str) else x).mean()
+            avg_overheal1 = self.df1['Overheal'].apply(lambda x: self.parse_percentage(x) if isinstance(x, str) else self.parse_number(x)).mean()
+            avg_overheal2 = self.df2['Overheal'].apply(lambda x: self.parse_percentage(x) if isinstance(x, str) else self.parse_number(x)).mean()
             result['summary']['avg_overheal_percent'] = {
                 'before': avg_overheal1,
                 'after': avg_overheal2,
@@ -252,16 +268,16 @@ class WowLogAnalyzer:
             heal_data2 = self.df2[self.df2['Name'] == heal].iloc[0]
 
             # Casts 비교
-            casts1 = heal_data1.get('Casts', 0)
-            casts2 = heal_data2.get('Casts', 0)
+            casts1 = int(self.parse_number(heal_data1.get('Casts', 0)))
+            casts2 = int(self.parse_number(heal_data2.get('Casts', 0)))
 
             # Crit % 비교
             crit1 = self.parse_percentage(heal_data1.get('Crit %', '0%'))
             crit2 = self.parse_percentage(heal_data2.get('Crit %', '0%'))
 
             # HPS 비교
-            hps1 = heal_data1.get('HPS', 0)
-            hps2 = heal_data2.get('HPS', 0)
+            hps1 = self.parse_number(heal_data1.get('HPS', 0))
+            hps2 = self.parse_number(heal_data2.get('HPS', 0))
 
             result['heals'].append({
                 'name': heal,

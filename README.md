@@ -42,15 +42,49 @@ CSV 파일의 컬럼을 분석해서 자동으로 역할을 판단합니다:
 pip install -r requirements.txt
 ```
 
-### 3. 환경 변수 설정
-`.env` 파일에 디스코드 봇 토큰을 입력하세요:
-```
-DISCORD_TOKEN=your_discord_bot_token_here
+### 3. Discord Bot 생성 및 토큰 발급
+
+1. [Discord Developer Portal](https://discord.com/developers/applications)에 접속
+2. "New Application" 클릭하여 새 애플리케이션 생성
+3. 좌측 메뉴에서 "Bot" 선택
+4. "Add Bot" 클릭
+5. "Reset Token" 클릭하여 토큰 생성 (토큰을 복사해서 안전하게 보관)
+6. **Privileged Gateway Intents** 섹션에서 다음 항목 활성화:
+   - ✅ Message Content Intent (중요!)
+
+### 4. 환경 변수 설정
+
+`.env.example` 파일을 복사하여 `.env` 파일 생성:
+```bash
+cp .env.example .env
 ```
 
-### 4. 봇 실행
+`.env` 파일을 열어서 디스코드 봇 토큰을 입력하세요:
+```
+DISCORD_TOKEN=여기에_복사한_봇_토큰_붙여넣기
+```
+
+### 5. 봇을 서버에 초대
+
+1. Discord Developer Portal에서 좌측 "OAuth2" → "URL Generator" 선택
+2. **Scopes**에서 `bot` 선택
+3. **Bot Permissions**에서 다음 권한 선택:
+   - ✅ Send Messages (메시지 보내기)
+   - ✅ Embed Links (링크 첨부)
+   - ✅ Attach Files (파일 첨부)
+   - ✅ Read Message History (메시지 기록 보기)
+4. 생성된 URL로 접속하여 봇을 서버에 초대
+
+### 6. 봇 실행
 ```bash
 python bot.py
+```
+
+봇이 성공적으로 실행되면 다음과 같은 메시지가 표시됩니다:
+```
+WowCompareBot 봇이 성공적으로 연결되었습니다!
+Bot ID: 1234567890
+------
 ```
 
 ## 사용 방법
