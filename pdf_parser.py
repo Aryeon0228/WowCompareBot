@@ -93,6 +93,36 @@ def clean_table_data(table: List[List]) -> pd.DataFrame:
     return df
 
 
+def deduplicate_characters(text: str) -> str:
+    """
+    Remove duplicated characters from PDF text extraction artifacts.
+    WoW Logs PDFs sometimes have every character duplicated.
+
+    Example: 'NNiiggrroommaanncceerr' -> 'Nigromancer'
+             '애애기기마마녀녀' -> '애기마녀'
+    """
+    if not text:
+        return text
+
+    # Check if text has duplicated characters (every char appears twice in a row)
+    # Take every other character starting from index 0
+    deduplicated = text[::2]
+
+    # Verify that the pattern is actually duplicated
+    # (compare original with doubled version of deduplicated)
+    if len(text) > 0 and text == (deduplicated[0] + deduplicated[0] if len(deduplicated) > 0 else ''):
+        return deduplicated
+
+    # More robust check: if text length is even and each pair matches
+    if len(text) % 2 == 0:
+        is_duplicated = all(text[i] == text[i+1] for i in range(0, len(text), 2))
+        if is_duplicated:
+            return deduplicated
+
+    # If not duplicated, return original
+    return text
+
+
 def parse_pdf(pdf_path: str) -> Dict:
     """
     Parse WoW Logs PDF file and extract data using pdfplumber
@@ -131,21 +161,46 @@ def parse_pdf(pdf_path: str) -> Dict:
             for i, line in enumerate(lines[:20]):
                 print(f"  Line {i}: {line[:100]}")
 
-            # Find title (usually first non-empty line or contains character name)
-            title = None
-            for line in lines[:10]:  # Check first 10 lines
+            # Extract character name from Line 1 (after "Translate" line)
+            # Line 1 typically contains the character name with duplicated characters
+            if len(lines) > 1:
+                char_line = lines[1].strip()
+                if char_line:
+                    # Remove duplicated characters
+                    character_name = deduplicate_characters(char_line)
+                    if character_name and len(character_name) > 0:
+                        result['character'] = character_name
+                        print(f"[DEBUG] Extracted character name from Line 1: {result['character']}")
+
+            # Find boss name from the fight info line
+            # Look for lines with boss name patterns like "바위 수호자 Heroic (25 Player)"
+            for line in lines[:20]:
                 line = line.strip()
-                if line and ('피해' in line or '치유' in line or '-' in line):
-                    title = line
-                    print(f"[DEBUG] Found title: {title}")
+                # Look for pattern: "BossName Heroic/Normal/Mythic (XX Player)"
+                boss_match = re.search(r'^(.+?)\s+(?:Heroic|Normal|Mythic)\s+\(\d+\s+Player\)', line)
+                if boss_match:
+                    result['boss'] = boss_match.group(1).strip()
+                    print(f"[DEBUG] Extracted boss name: {result['boss']}")
                     break
 
-            # Extract metadata from title
-            if title:
-                metadata = extract_metadata_from_title(title)
-                result['character'] = metadata['character']
-                result['boss'] = metadata['boss']
-                print(f"[DEBUG] Extracted metadata: character={result['character']}, boss={result['boss']}")
+            # Fallback: Try old title extraction method
+            if not result['character'] or not result['boss']:
+                title = None
+                for line in lines[:10]:  # Check first 10 lines
+                    line = line.strip()
+                    if line and ('피해' in line or '치유' in line) and '-' in line:
+                        title = line
+                        print(f"[DEBUG] Found title: {title}")
+                        break
+
+                # Extract metadata from title
+                if title:
+                    metadata = extract_metadata_from_title(title)
+                    if not result['character']:
+                        result['character'] = metadata['character']
+                    if not result['boss']:
+                        result['boss'] = metadata['boss']
+                    print(f"[DEBUG] Extracted metadata from title: character={result['character']}, boss={result['boss']}")
 
             # Find combat duration (format: "1:24" or "84초" or "Combat Time: ...")
             for line in lines[:30]:
@@ -197,10 +252,45 @@ def parse_pdf(pdf_path: str) -> Dict:
             if not tables:
                 raise ValueError("No tables found in PDF")
 
-            # Usually the main data table is the largest one
-            main_table = max(tables, key=lambda t: len(t) if t else 0)
+            # Find the main data table (not website navigation)
+            # The real data table should have:
+            # 1. Multiple rows (>5 typically)
+            # 2. Multiple columns with actual data
+            # 3. Not be the website header/navigation
+            main_table = None
 
-            print(f"[DEBUG] Main table has {len(main_table)} rows")
+            # Try to find a table that looks like skill/damage data
+            for idx, table in enumerate(tables):
+                if not table or len(table) < 5:
+                    continue
+
+                # Check if first row has suspicious navigation keywords
+                first_row = [str(cell).lower() if cell else '' for cell in table[0]]
+                if any('classic fresh' in cell or 'discovery' in cell or 'vanilla' in cell or 'language' in cell.lower() for cell in first_row):
+                    print(f"[DEBUG] Skipping table {idx} - looks like navigation (first row: {table[0][:3]})")
+                    continue
+
+                # Check if table has numeric data in later rows (sign of actual data table)
+                has_numbers = False
+                for row in table[1:min(5, len(table))]:
+                    for cell in row:
+                        if cell and re.search(r'\d{3,}', str(cell)):  # Look for numbers with 3+ digits
+                            has_numbers = True
+                            break
+                    if has_numbers:
+                        break
+
+                if has_numbers:
+                    print(f"[DEBUG] Found data table at index {idx} with {len(table)} rows")
+                    main_table = table
+                    break
+
+            # Fallback: use the largest table if no good candidate found
+            if not main_table:
+                print(f"[DEBUG] No ideal table found, using largest table as fallback")
+                main_table = max(tables, key=lambda t: len(t) if t else 0)
+
+            print(f"[DEBUG] Selected table has {len(main_table)} rows")
             if main_table:
                 print(f"[DEBUG] First row (header): {main_table[0]}")
                 if len(main_table) > 1:
