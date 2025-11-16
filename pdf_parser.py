@@ -1,9 +1,9 @@
 """
 PDF Parser for WoW Logs
-Extracts character names, boss names, and skill data from WoW Logs PDF exports
+Extracts character names, boss names, and skill data from WoW Logs PDF exports using pdfplumber
 """
 
-import PyPDF2
+import pdfplumber
 import pandas as pd
 import re
 from typing import Dict, Optional, List
@@ -28,7 +28,7 @@ def extract_metadata_from_title(title: str) -> Dict[str, Optional[str]]:
     }
 
     # Try to match the pattern: {Type}: {Character} - {Boss} ...
-    match = re.search(r'^(입힌 피해|치유|받은 피해):\s*(.+?)\s*-\s*(.+?)(?:\s+\(|$)', title)
+    match = re.search(r'^(입힌 피해|치유|받은 피해):\s*(.+?)\s*-\s*(.+?)(?:\s+(?:Heroic|Normal|Mythic|Kill|\()|$)', title)
     if match:
         result['log_type'] = match.group(1)
         result['character'] = match.group(2).strip()
@@ -37,70 +37,55 @@ def extract_metadata_from_title(title: str) -> Dict[str, Optional[str]]:
     return result
 
 
-def parse_table_from_text(lines: List[str], start_idx: int) -> pd.DataFrame:
+def clean_table_data(table: List[List]) -> pd.DataFrame:
     """
-    Parse table data from text lines
-    Assumes table format with columns separated by whitespace
+    Clean and convert table data to DataFrame
+
+    Args:
+        table: Raw table data from pdfplumber (list of lists)
+
+    Returns:
+        Cleaned pandas DataFrame
     """
-    # Find table header line (usually contains "Name", "Amount", "Casts", etc.)
-    header_idx = None
-    for i in range(start_idx, min(start_idx + 20, len(lines))):
-        line = lines[i]
-        if 'Name' in line and ('Amount' in line or 'Casts' in line or 'DPS' in line):
-            header_idx = i
-            break
+    if not table or len(table) < 2:
+        raise ValueError("Table has insufficient data")
 
-    if header_idx is None:
-        # Try alternative: look for common WoW log table headers
-        for i in range(start_idx, min(start_idx + 20, len(lines))):
-            line = lines[i]
-            # Check for Korean or common headers
-            if any(keyword in line for keyword in ['이름', 'Ability', 'Damage', 'Healing']):
-                header_idx = i
-                break
+    # First row is header
+    headers = table[0]
+    data_rows = table[1:]
 
-    if header_idx is None:
-        raise ValueError("Could not find table header in PDF")
+    # Remove None values and clean headers
+    headers = [str(h).strip() if h is not None else f'Column_{i}' for i, h in enumerate(headers)]
 
-    # Parse header to get column names
-    header_line = lines[header_idx]
-    # Split by multiple spaces (assuming columns are separated by 2+ spaces)
-    headers = re.split(r'\s{2,}', header_line.strip())
+    # Clean data rows - replace None with empty string
+    cleaned_rows = []
+    for row in data_rows:
+        cleaned_row = [str(cell).strip() if cell is not None else '' for cell in row]
+        # Skip completely empty rows
+        if any(cleaned_row):
+            cleaned_rows.append(cleaned_row)
 
-    # Parse data rows (until we hit an empty line or end of table)
-    data_rows = []
-    for i in range(header_idx + 1, len(lines)):
-        line = lines[i].strip()
-        if not line or line.startswith('---') or 'Total' in line and i > header_idx + 10:
-            break
-
-        # Split by multiple spaces
-        row_data = re.split(r'\s{2,}', line)
-        if len(row_data) >= 2:  # Need at least name and one value
-            data_rows.append(row_data)
-
-    if not data_rows:
+    if not cleaned_rows:
         raise ValueError("No data rows found in table")
 
-    # Create DataFrame
-    # Pad rows to match header length
-    max_cols = max(len(headers), max(len(row) for row in data_rows))
-    headers = headers + [f'Column_{i}' for i in range(len(headers), max_cols)]
-
-    for row in data_rows:
+    # Ensure all rows have the same number of columns as headers
+    max_cols = len(headers)
+    for row in cleaned_rows:
         while len(row) < max_cols:
             row.append('')
+        # Truncate if too many columns
+        if len(row) > max_cols:
+            row[:] = row[:max_cols]
 
-    df = pd.DataFrame(data_rows, columns=headers[:max_cols])
+    # Create DataFrame
+    df = pd.DataFrame(cleaned_rows, columns=headers)
 
-    # Clean up column names and data
-    df.columns = [col.strip() for col in df.columns]
-
-    # Clean numeric columns (remove commas)
+    # Clean numeric columns (remove commas, percentage signs)
     for col in df.columns:
-        if col != 'Name':
+        if col not in ['Name', 'Ability', 'Skill', '이름']:
             try:
                 df[col] = df[col].astype(str).str.replace(',', '').str.replace('%', '')
+                # Try to convert to numeric, but keep as string if fails
                 df[col] = pd.to_numeric(df[col], errors='ignore')
             except:
                 pass
@@ -110,7 +95,7 @@ def parse_table_from_text(lines: List[str], start_idx: int) -> pd.DataFrame:
 
 def parse_pdf(pdf_path: str) -> Dict:
     """
-    Parse WoW Logs PDF file and extract data
+    Parse WoW Logs PDF file and extract data using pdfplumber
 
     Returns:
         dict containing:
@@ -129,14 +114,12 @@ def parse_pdf(pdf_path: str) -> Dict:
     }
 
     try:
-        with open(pdf_path, 'rb') as file:
-            pdf_reader = PyPDF2.PdfReader(file)
-
-            if len(pdf_reader.pages) == 0:
+        with pdfplumber.open(pdf_path) as pdf:
+            if len(pdf.pages) == 0:
                 raise ValueError("PDF has no pages")
 
-            # Extract text from first page
-            first_page = pdf_reader.pages[0]
+            # Extract text from first page for metadata
+            first_page = pdf.pages[0]
             text = first_page.extract_text()
 
             if not text:
@@ -144,12 +127,17 @@ def parse_pdf(pdf_path: str) -> Dict:
 
             lines = text.split('\n')
 
+            print(f"[DEBUG] PDF text lines (first 20):")
+            for i, line in enumerate(lines[:20]):
+                print(f"  Line {i}: {line[:100]}")
+
             # Find title (usually first non-empty line or contains character name)
             title = None
             for line in lines[:10]:  # Check first 10 lines
                 line = line.strip()
-                if line and ('피해' in line or '-' in line):
+                if line and ('피해' in line or '치유' in line or '-' in line):
                     title = line
+                    print(f"[DEBUG] Found title: {title}")
                     break
 
             # Extract metadata from title
@@ -157,6 +145,7 @@ def parse_pdf(pdf_path: str) -> Dict:
                 metadata = extract_metadata_from_title(title)
                 result['character'] = metadata['character']
                 result['boss'] = metadata['boss']
+                print(f"[DEBUG] Extracted metadata: character={result['character']}, boss={result['boss']}")
 
             # Find combat duration (format: "1:24" or "84초" or "Combat Time: ...")
             for line in lines[:30]:
@@ -167,12 +156,14 @@ def parse_pdf(pdf_path: str) -> Dict:
                     seconds = int(time_match.group(2))
                     if minutes < 60:  # Sanity check (fights rarely > 1 hour)
                         result['combat_duration'] = minutes * 60 + seconds
+                        print(f"[DEBUG] Found combat duration: {result['combat_duration']}s")
                         break
 
                 # Look for seconds format
                 seconds_match = re.search(r'(\d+)초', line)
                 if seconds_match:
                     result['combat_duration'] = int(seconds_match.group(1))
+                    print(f"[DEBUG] Found combat duration: {result['combat_duration']}s")
                     break
 
             # Find total DPS/HPS
@@ -183,6 +174,7 @@ def parse_pdf(pdf_path: str) -> Dict:
                     dps_str = dps_match.group(1).replace(',', '')
                     try:
                         result['total_dps'] = float(dps_str)
+                        print(f"[DEBUG] Found DPS: {result['total_dps']}")
                         break
                     except:
                         pass
@@ -192,12 +184,33 @@ def parse_pdf(pdf_path: str) -> Dict:
                     hps_str = hps_match.group(1).replace(',', '')
                     try:
                         result['total_dps'] = float(hps_str)
+                        print(f"[DEBUG] Found HPS: {result['total_dps']}")
                         break
                     except:
                         pass
 
-            # Parse table data from text
-            df = parse_table_from_text(lines, 0)
+            # Extract tables from PDF
+            tables = first_page.extract_tables()
+
+            print(f"[DEBUG] Found {len(tables)} tables in PDF")
+
+            if not tables:
+                raise ValueError("No tables found in PDF")
+
+            # Usually the main data table is the largest one
+            main_table = max(tables, key=lambda t: len(t) if t else 0)
+
+            print(f"[DEBUG] Main table has {len(main_table)} rows")
+            if main_table:
+                print(f"[DEBUG] First row (header): {main_table[0]}")
+                if len(main_table) > 1:
+                    print(f"[DEBUG] Second row (data): {main_table[1]}")
+
+            # Clean and convert to DataFrame
+            df = clean_table_data(main_table)
+
+            print(f"[DEBUG] DataFrame shape: {df.shape}")
+            print(f"[DEBUG] DataFrame columns: {df.columns.tolist()}")
 
             # Standardize column names to match CSV format
             column_mapping = {
@@ -219,13 +232,13 @@ def parse_pdf(pdf_path: str) -> Dict:
                 'Average': 'Avg',
                 'Avg': 'Avg',
                 '평균': 'Avg',
-                'Crit %': 'Crit%',
-                'Crit': 'Crit%',
-                'Critical': 'Crit%',
-                '치명타': 'Crit%',
-                'Uptime %': 'Uptime%',
-                'Uptime': 'Uptime%',
-                '유지 시간': 'Uptime%',
+                'Crit %': 'Crit %',
+                'Crit': 'Crit %',
+                'Critical': 'Crit %',
+                '치명타': 'Crit %',
+                'Uptime %': 'Uptime %',
+                'Uptime': 'Uptime %',
+                '유지 시간': 'Uptime %',
                 'DPS': 'DPS',
                 'HPS': 'HPS',
                 'DTPS': 'DTPS'
@@ -238,6 +251,10 @@ def parse_pdf(pdf_path: str) -> Dict:
             # Filter out empty rows
             df = df.dropna(how='all')
 
+            # Filter out rows where Name is empty or invalid
+            if 'Name' in df.columns:
+                df = df[df['Name'].notna() & (df['Name'] != '') & (df['Name'] != 'None')]
+
             # Ensure we have at least Name column
             if 'Name' not in df.columns and len(df.columns) > 0:
                 # First column is probably the name
@@ -248,7 +265,13 @@ def parse_pdf(pdf_path: str) -> Dict:
 
             result['dataframe'] = df
 
+            print(f"[DEBUG] Final DataFrame shape: {df.shape}")
+            print(f"[DEBUG] Final columns: {df.columns.tolist()}")
+            if len(df) > 0:
+                print(f"[DEBUG] First row: {df.iloc[0].to_dict()}")
+
     except Exception as e:
+        print(f"[ERROR] PDF parsing failed: {str(e)}")
         raise ValueError(f"Failed to parse PDF: {str(e)}")
 
     return result
