@@ -172,6 +172,10 @@ async def compare(ctx):
 
         # Embed와 그래프 전송
         try:
+            # 캐릭터 이름 전달
+            char1_name = result.get('char1_name', 'Target')
+            char2_name = result.get('char2_name', 'You')
+
             if graph_path and os.path.exists(graph_path):
                 file = discord.File(graph_path, filename="comparison_graph.png")
                 embed.set_image(url="attachment://comparison_graph.png")
@@ -206,6 +210,10 @@ def create_comparison_graph(result: dict, file1_name: str, file2_name: str) -> s
     """비교 그래프를 생성하고 파일 경로를 반환합니다"""
     role = result.get('role', 'UNKNOWN')
 
+    # 캐릭터 이름 가져오기
+    char1_name = result.get('char1_name', 'Target')
+    char2_name = result.get('char2_name', 'You')
+
     # 한글 폰트 설정 (시스템에 따라 다를 수 있음)
     plt.rcParams['font.family'] = 'DejaVu Sans'
     plt.rcParams['axes.unicode_minus'] = False
@@ -217,7 +225,7 @@ def create_comparison_graph(result: dict, file1_name: str, file2_name: str) -> s
         summary = result.get('summary', {})
         if 'total_dps' in summary:
             dps_data = summary['total_dps']
-            categories = ['Target', 'You']
+            categories = [f'🎯 {char1_name}', f'👤 {char2_name}']
             values = [dps_data['before'], dps_data['after']]
 
             colors = ['#FF6B6B', '#4ECDC4']
@@ -247,7 +255,7 @@ def create_comparison_graph(result: dict, file1_name: str, file2_name: str) -> s
         summary = result.get('summary', {})
         if 'total_dtps' in summary:
             dtps_data = summary['total_dtps']
-            categories = ['Target', 'You']
+            categories = [f'🎯 {char1_name}', f'👤 {char2_name}']
             values = [dtps_data['before'], dtps_data['after']]
 
             # DTPS는 낮을수록 좋으므로 색상 반전
@@ -278,7 +286,7 @@ def create_comparison_graph(result: dict, file1_name: str, file2_name: str) -> s
         summary = result.get('summary', {})
         if 'total_hps' in summary:
             hps_data = summary['total_hps']
-            categories = ['Target', 'You']
+            categories = [f'🎯 {char1_name}', f'👤 {char2_name}']
             values = [hps_data['before'], hps_data['after']]
 
             colors = ['#FF6B6B', '#4ECDC4']
@@ -325,10 +333,22 @@ def extract_character_info(filename: str) -> dict:
         'raid_size': None
     }
 
-    # 캐릭터 이름 추출: '이름' 형식
+    # 캐릭터 이름 추출: 다양한 패턴 시도
+    # 패턴 1: '이름' 형식 (작은따옴표)
     char_match = re.search(r"'([^']+)'", filename)
     if char_match:
         info['character'] = char_match.group(1)
+    else:
+        # 패턴 2: "이름" 형식 (큰따옴표)
+        char_match = re.search(r'"([^"]+)"', filename)
+        if char_match:
+            info['character'] = char_match.group(1)
+        else:
+            # 패턴 3: 파일명의 첫 부분 (CSV 확장자 제거 후 첫 번째 단어/구문)
+            # 예: "CharacterName-Boss.csv" -> "CharacterName"
+            name_part = filename.replace('.csv', '').split('-')[0].split('_')[0].strip()
+            if name_part and len(name_part) > 0:
+                info['character'] = name_part
 
     # 난이도 추출: Heroic, Normal, Mythic 등
     if 'Heroic' in filename:
@@ -380,11 +400,11 @@ def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embe
     # Description 생성
     description_parts = []
 
-    # 비교 대상 정보
-    char1 = info1['character'] if info1['character'] else "Unknown"
-    char2 = info2['character'] if info2['character'] else "Unknown"
-    description_parts.append(f"**목표:** {char1}")
-    description_parts.append(f"**나:** {char2}")
+    # 비교 대상 정보 - 캐릭터 이름이 없으면 파일명 사용
+    char1 = info1['character'] if info1['character'] else file1_name.replace('.csv', '')
+    char2 = info2['character'] if info2['character'] else file2_name.replace('.csv', '')
+    description_parts.append(f"**🎯 목표 (비교 대상):** {char1}")
+    description_parts.append(f"**👤 나 (내 캐릭터):** {char2}")
 
     # 전투 정보 (둘 중 하나라도 있으면 표시)
     fight_info = []
@@ -407,6 +427,10 @@ def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embe
         description='\n'.join(description_parts),
         color=color
     )
+
+    # 캐릭터 이름을 result에 저장하여 다른 함수에서도 사용 가능하게
+    result['char1_name'] = char1
+    result['char2_name'] = char2
 
     # 역할별 결과 추가
     if role == 'DPS':
@@ -438,6 +462,8 @@ def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embe
 def add_dps_fields(embed: discord.Embed, result: dict):
     """DPS 분석 결과를 Embed에 추가"""
     summary = result.get('summary', {})
+    char1_name = result.get('char1_name', '목표')
+    char2_name = result.get('char2_name', '나')
 
     # 총 DPS
     if 'total_dps' in summary:
@@ -450,8 +476,8 @@ def add_dps_fields(embed: discord.Embed, result: dict):
 
         embed.add_field(
             name="💥 총 DPS",
-            value=f"**Before:** {dps_data['before']:.1f}\n"
-                  f"**After:** {dps_data['after']:.1f}\n"
+            value=f"**🎯 {char1_name}:** {dps_data['before']:.1f}\n"
+                  f"**👤 {char2_name}:** {dps_data['after']:.1f}\n"
                   f"{indicator} **차이:** {sign}{dps_diff:.1f} ({sign}{dps_diff_percent:.1f}%)",
             inline=False
         )
@@ -471,14 +497,14 @@ def add_dps_fields(embed: discord.Embed, result: dict):
             crit_sign = "+" if crit_diff > 0 else ""
 
             skills_text += f"**{skill['name']}**\n"
-            skills_text += f"  {casts_indicator} Casts: {skill['casts']['before']} → {skill['casts']['after']} ({casts_diff:+d})\n"
-            skills_text += f"  🎯 Crit: {skill['crit_percent']['before']:.1f}% → {skill['crit_percent']['after']:.1f}% ({crit_sign}{crit_diff:.1f}%)\n"
+            skills_text += f"  {casts_indicator} Casts: {skill['casts']['before']} > {skill['casts']['after']} ({casts_diff:+d})\n"
+            skills_text += f"  🎯 Crit: {skill['crit_percent']['before']:.1f}% > {skill['crit_percent']['after']:.1f}% ({crit_sign}{crit_diff:.1f}%)\n"
 
             # Uptime이 있는 경우 (DoT 스킬)
             if skill['uptime_percent']['before'] > 0 or skill['uptime_percent']['after'] > 0:
                 uptime_diff = skill['uptime_percent']['diff']
                 uptime_sign = "+" if uptime_diff > 0 else ""
-                skills_text += f"  ⏱️ Uptime: {skill['uptime_percent']['before']:.1f}% → {skill['uptime_percent']['after']:.1f}% ({uptime_sign}{uptime_diff:.1f}%)\n"
+                skills_text += f"  ⏱️ Uptime: {skill['uptime_percent']['before']:.1f}% > {skill['uptime_percent']['after']:.1f}% ({uptime_sign}{uptime_diff:.1f}%)\n"
 
             skills_text += "\n"
 
@@ -489,6 +515,8 @@ def add_dps_fields(embed: discord.Embed, result: dict):
 def add_tank_fields(embed: discord.Embed, result: dict):
     """탱커 분석 결과를 Embed에 추가"""
     summary = result.get('summary', {})
+    char1_name = result.get('char1_name', '목표')
+    char2_name = result.get('char2_name', '나')
 
     # 총 DTPS
     if 'total_dtps' in summary:
@@ -502,8 +530,8 @@ def add_tank_fields(embed: discord.Embed, result: dict):
 
         embed.add_field(
             name="💔 총 받은 피해 (DTPS)",
-            value=f"**Before:** {dtps_data['before']:.1f}\n"
-                  f"**After:** {dtps_data['after']:.1f}\n"
+            value=f"**🎯 {char1_name}:** {dtps_data['before']:.1f}\n"
+                  f"**👤 {char2_name}:** {dtps_data['after']:.1f}\n"
                   f"{indicator} **차이:** {sign}{dtps_diff:.1f} ({sign}{dtps_diff_percent:.1f}%)",
             inline=False
         )
@@ -517,8 +545,8 @@ def add_tank_fields(embed: discord.Embed, result: dict):
 
         embed.add_field(
             name="🛡️ 피해 감소 (Mitigated)",
-            value=f"**Before:** {mit_data['before']:.1f}\n"
-                  f"**After:** {mit_data['after']:.1f}\n"
+            value=f"**🎯 {char1_name}:** {mit_data['before']:.1f}\n"
+                  f"**👤 {char2_name}:** {mit_data['after']:.1f}\n"
                   f"{indicator} **차이:** {sign}{mit_diff:.1f}",
             inline=True
         )
@@ -533,8 +561,8 @@ def add_tank_fields(embed: discord.Embed, result: dict):
 
         embed.add_field(
             name="🌫️ 평균 회피율 (Miss %)",
-            value=f"**Before:** {miss_data['before']:.1f}%\n"
-                  f"**After:** {miss_data['after']:.1f}%\n"
+            value=f"**🎯 {char1_name}:** {miss_data['before']:.1f}%\n"
+                  f"**👤 {char2_name}:** {miss_data['after']:.1f}%\n"
                   f"{indicator} **차이:** {sign}{miss_diff:.1f}%",
             inline=True
         )
@@ -550,7 +578,7 @@ def add_tank_fields(embed: discord.Embed, result: dict):
             indicator = "⬆️" if dtps_diff > 0 else "⬇️" if dtps_diff < 0 else "➖"
 
             sources_text += f"**{source['name']}**\n"
-            sources_text += f"  {indicator} DTPS: {source['dtps']['before']:.1f} → {source['dtps']['after']:.1f} ({dtps_diff:+.1f})\n\n"
+            sources_text += f"  {indicator} DTPS: {source['dtps']['before']:.1f} > {source['dtps']['after']:.1f} ({dtps_diff:+.1f})\n\n"
 
         if sources_text:
             embed.add_field(name="⚔️ 주요 피해 소스", value=sources_text.strip(), inline=False)
@@ -559,6 +587,8 @@ def add_tank_fields(embed: discord.Embed, result: dict):
 def add_healer_fields(embed: discord.Embed, result: dict):
     """힐러 분석 결과를 Embed에 추가"""
     summary = result.get('summary', {})
+    char1_name = result.get('char1_name', '목표')
+    char2_name = result.get('char2_name', '나')
 
     # 총 HPS
     if 'total_hps' in summary:
@@ -571,8 +601,8 @@ def add_healer_fields(embed: discord.Embed, result: dict):
 
         embed.add_field(
             name="💚 총 HPS",
-            value=f"**Before:** {hps_data['before']:.1f}\n"
-                  f"**After:** {hps_data['after']:.1f}\n"
+            value=f"**🎯 {char1_name}:** {hps_data['before']:.1f}\n"
+                  f"**👤 {char2_name}:** {hps_data['after']:.1f}\n"
                   f"{indicator} **차이:** {sign}{hps_diff:.1f} ({sign}{hps_diff_percent:.1f}%)",
             inline=False
         )
@@ -587,8 +617,8 @@ def add_healer_fields(embed: discord.Embed, result: dict):
 
         embed.add_field(
             name="💧 평균 오버힐 %",
-            value=f"**Before:** {overheal_data['before']:.1f}%\n"
-                  f"**After:** {overheal_data['after']:.1f}%\n"
+            value=f"**🎯 {char1_name}:** {overheal_data['before']:.1f}%\n"
+                  f"**👤 {char2_name}:** {overheal_data['after']:.1f}%\n"
                   f"{indicator} **차이:** {sign}{overheal_diff:.1f}%",
             inline=True
         )
@@ -609,9 +639,9 @@ def add_healer_fields(embed: discord.Embed, result: dict):
             crit_sign = "+" if crit_diff > 0 else ""
 
             heals_text += f"**{heal['name']}**\n"
-            heals_text += f"  {hps_indicator} HPS: {heal['hps']['before']:.1f} → {heal['hps']['after']:.1f} ({hps_diff:+.1f})\n"
-            heals_text += f"  {casts_indicator} Casts: {heal['casts']['before']} → {heal['casts']['after']} ({casts_diff:+d})\n"
-            heals_text += f"  🎯 Crit: {heal['crit_percent']['before']:.1f}% → {heal['crit_percent']['after']:.1f}% ({crit_sign}{crit_diff:.1f}%)\n\n"
+            heals_text += f"  {hps_indicator} HPS: {heal['hps']['before']:.1f} > {heal['hps']['after']:.1f} ({hps_diff:+.1f})\n"
+            heals_text += f"  {casts_indicator} Casts: {heal['casts']['before']} > {heal['casts']['after']} ({casts_diff:+d})\n"
+            heals_text += f"  🎯 Crit: {heal['crit_percent']['before']:.1f}% > {heal['crit_percent']['after']:.1f}% ({crit_sign}{crit_diff:.1f}%)\n\n"
 
         if heals_text:
             embed.add_field(name="💊 주요 힐 스킬 비교", value=heals_text.strip(), inline=False)
