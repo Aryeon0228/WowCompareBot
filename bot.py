@@ -314,9 +314,54 @@ def create_comparison_graph(result: dict, file1_name: str, file2_name: str) -> s
     return graph_path
 
 
+def extract_character_info(filename: str) -> dict:
+    """파일명에서 캐릭터와 전투 정보를 추출합니다"""
+    import re
+
+    info = {
+        'character': None,
+        'difficulty': None,
+        'boss': None,
+        'raid_size': None
+    }
+
+    # 캐릭터 이름 추출: '이름' 형식
+    char_match = re.search(r"'([^']+)'", filename)
+    if char_match:
+        info['character'] = char_match.group(1)
+
+    # 난이도 추출: Heroic, Normal, Mythic 등
+    if 'Heroic' in filename:
+        info['difficulty'] = 'Heroic'
+    elif 'Mythic' in filename:
+        info['difficulty'] = 'Mythic'
+    elif 'Normal' in filename:
+        info['difficulty'] = 'Normal'
+
+    # 레이드 인원 추출: 10, 25 등
+    size_match = re.search(r'(\d+)_Player', filename)
+    if size_match:
+        info['raid_size'] = size_match.group(1)
+
+    # 보스/던전 이름 추출
+    if 'Dragon_Soul' in filename or 'Dragon Soul' in filename:
+        info['boss'] = 'Dragon Soul'
+    elif 'Firelands' in filename:
+        info['boss'] = 'Firelands'
+    elif 'Icecrown' in filename:
+        info['boss'] = 'Icecrown Citadel'
+    # 더 많은 레이드 추가 가능
+
+    return info
+
+
 def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embed:
     """분석 결과를 Discord Embed로 변환합니다"""
     role = result.get('role', 'UNKNOWN')
+
+    # 파일명에서 정보 추출
+    info1 = extract_character_info(file1_name)
+    info2 = extract_character_info(file2_name)
 
     # 역할에 따른 색상 선택
     if role == 'DPS':
@@ -332,9 +377,34 @@ def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embe
         color = COLOR_BLUE
         emoji = "📊"
 
+    # Description 생성
+    description_parts = []
+
+    # 비교 대상 정보
+    char1 = info1['character'] if info1['character'] else "Unknown"
+    char2 = info2['character'] if info2['character'] else "Unknown"
+    description_parts.append(f"**목표:** {char1}")
+    description_parts.append(f"**나:** {char2}")
+
+    # 전투 정보 (둘 중 하나라도 있으면 표시)
+    fight_info = []
+    difficulty = info1['difficulty'] or info2['difficulty']
+    raid_size = info1['raid_size'] or info2['raid_size']
+    boss = info1['boss'] or info2['boss']
+
+    if boss:
+        fight_info.append(boss)
+    if difficulty:
+        fight_info.append(difficulty)
+    if raid_size:
+        fight_info.append(f"{raid_size}인")
+
+    if fight_info:
+        description_parts.append(f"\n⚔️ **전투:** {' '.join(fight_info)}")
+
     embed = discord.Embed(
         title=f"{emoji} WoW Logs 비교 분석 - {role}",
-        description=f"**Before:** `{file1_name}`\n**After:** `{file2_name}`",
+        description='\n'.join(description_parts),
         color=color
     )
 
