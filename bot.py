@@ -22,6 +22,73 @@ async def on_ready():
     print('------')
 
 
+@bot.event
+async def on_command_error(ctx, error):
+    """전역 에러 핸들러"""
+    if isinstance(error, commands.CommandInvokeError):
+        original_error = error.original
+
+        if isinstance(original_error, discord.Forbidden):
+            # 권한 부족 에러
+            try:
+                await ctx.send(
+                    "❌ 봇에게 필요한 권한이 없습니다.\n"
+                    "서버 관리자에게 다음 권한을 부여해달라고 요청하세요:\n"
+                    "• 메시지 보내기 (Send Messages)\n"
+                    "• 링크 첨부 (Embed Links)\n"
+                    "• 파일 첨부 (Attach Files)"
+                )
+            except discord.Forbidden:
+                # 메시지 전송조차 불가능한 경우
+                print(f"[ERROR] Cannot send messages in channel {ctx.channel.id} - Missing permissions")
+            return
+
+        # 기타 에러는 로그만 출력
+        print(f"[ERROR] Command {ctx.command} failed: {original_error}")
+        try:
+            await ctx.send(f"❌ 명령어 실행 중 오류가 발생했습니다: {str(original_error)[:100]}")
+        except:
+            pass
+
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"❌ 필수 인자가 누락되었습니다: {error.param}")
+    elif isinstance(error, commands.CommandNotFound):
+        # CommandNotFound는 무시 (사용자가 잘못된 명령어 입력)
+        pass
+    else:
+        print(f"[ERROR] Unhandled error: {error}")
+
+
+async def safe_send_embed(ctx, embed, fallback_message=None):
+    """Embed를 안전하게 전송합니다. 권한이 없으면 일반 메시지로 전송합니다."""
+    try:
+        await ctx.send(embed=embed)
+        return True
+    except discord.Forbidden:
+        # Embed 전송 권한이 없으면 일반 텍스트로 시도
+        if fallback_message:
+            try:
+                await ctx.send(fallback_message)
+                return True
+            except discord.Forbidden:
+                # 메시지 전송조차 불가능한 경우
+                print(f"[ERROR] Cannot send messages in channel {ctx.channel.id}")
+                return False
+        else:
+            try:
+                await ctx.send(
+                    "❌ 봇에게 Embed 전송 권한이 없습니다. "
+                    "서버 관리자에게 '링크 첨부(Embed Links)' 권한을 부여해달라고 요청하세요."
+                )
+                return False
+            except discord.Forbidden:
+                print(f"[ERROR] Cannot send messages in channel {ctx.channel.id}")
+                return False
+    except Exception as e:
+        print(f"[ERROR] Failed to send embed: {e}")
+        return False
+
+
 @bot.command(name='compare')
 async def compare(ctx):
     """
@@ -54,7 +121,11 @@ async def compare(ctx):
         return
 
     # 분석 시작 - 타이핑 표시와 함께
-    status_msg = await ctx.send("⏳ 분석 중...")
+    try:
+        status_msg = await ctx.send("⏳ 분석 중...")
+    except discord.Forbidden:
+        print(f"[ERROR] Cannot send status message in channel {ctx.channel.id} - Missing permissions")
+        return
 
     try:
         # 타이핑 중 표시
@@ -64,16 +135,25 @@ async def compare(ctx):
 
         if result is None or 'error' in result:
             error_msg = result.get('error', '알 수 없는 오류') if result else '분석 실패'
-            await status_msg.edit(content=f"❌ {error_msg}")
+            try:
+                await status_msg.edit(content=f"❌ {error_msg}")
+            except discord.Forbidden:
+                print(f"[ERROR] Cannot edit message in channel {ctx.channel.id}")
             return
 
         # 결과를 Embed로 출력
         embed = create_embed(result, csv_files[0].filename, csv_files[1].filename)
-        await status_msg.edit(content="✅ 분석 완료!")
-        await ctx.send(embed=embed)
+        try:
+            await status_msg.edit(content="✅ 분석 완료!")
+        except discord.Forbidden:
+            print(f"[ERROR] Cannot edit message in channel {ctx.channel.id}")
+        await safe_send_embed(ctx, embed, fallback_message="분석이 완료되었지만 Embed 권한이 없어 결과를 표시할 수 없습니다.")
 
     except Exception as e:
-        await status_msg.edit(content=f"❌ 분석 오류: {e}")
+        try:
+            await status_msg.edit(content=f"❌ 분석 오류: {e}")
+        except:
+            print(f"[ERROR] Cannot edit status message: {e}")
     finally:
         # 임시 파일 삭제
         try:
@@ -344,7 +424,24 @@ async def help_compare(ctx):
         inline=False
     )
 
-    await ctx.send(embed=embed)
+    # 일반 텍스트 대체 메시지
+    fallback = (
+        "📖 **WoW Compare Bot 사용법**\n\n"
+        "**사용 방법:**\n"
+        "1. Warcraftlogs에서 CSV 파일 2개를 다운로드\n"
+        "2. 디스코드에 두 파일을 첨부\n"
+        "3. `!compare` 명령어 입력\n"
+        "4. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력\n\n"
+        "**지원하는 역할:**\n"
+        "⚔️ DPS: 총 DPS, 스킬 시전 횟수, 치명타율, DoT Uptime 비교\n"
+        "🛡️ 탱커: 받은 피해(DTPS), 피해 감소율, 회피율 비교\n"
+        "💚 힐러: 총 HPS, 오버힐, 힐 스킬 사용 빈도, 치명타율 비교\n\n"
+        "**명령어:**\n"
+        "`!compare` - CSV 파일 2개 비교\n"
+        "`!help_compare` - 이 도움말 표시"
+    )
+
+    await safe_send_embed(ctx, embed, fallback_message=fallback)
 
 
 # 봇 실행
