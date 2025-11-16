@@ -94,10 +94,13 @@ async def safe_send_embed(ctx, embed, fallback_message=None):
 
 
 @bot.command(name='compare')
-async def compare(ctx):
+async def compare(ctx, target: str = None, me: str = None):
     """
     !compare 명령어
+    사용법: !compare [목표캐릭터] [내캐릭터]
     2개의 CSV 파일을 첨부하고 이 명령어를 입력하면 분석 결과를 출력합니다.
+
+    예시: !compare 삼십이년째활쟁이 예카링
     """
     # 첨부파일 확인
     if len(ctx.message.attachments) != 2:
@@ -155,8 +158,8 @@ async def compare(ctx):
                 print(f"[ERROR] Cannot edit message in channel {ctx.channel.id}")
             return
 
-        # 결과를 Embed로 출력
-        embed = create_embed(result, csv_files[0].filename, csv_files[1].filename)
+        # 결과를 Embed로 출력 (사용자 지정 이름 전달)
+        embed = create_embed(result, csv_files[0].filename, csv_files[1].filename, target, me)
 
         # 그래프 생성
         graph_path = None
@@ -387,7 +390,7 @@ def extract_character_info(filename: str) -> dict:
     return info
 
 
-def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embed:
+def create_embed(result: dict, file1_name: str, file2_name: str, user_target: str = None, user_me: str = None) -> discord.Embed:
     """분석 결과를 Discord Embed로 변환합니다"""
     role = result.get('role', 'UNKNOWN')
 
@@ -400,6 +403,7 @@ def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embe
     print(f"[DEBUG] Extracted info 1: character={info1['character']}, boss={info1['boss']}, difficulty={info1['difficulty']}, raid_size={info1['raid_size']}")
     print(f"[DEBUG] File 2: {file2_name}")
     print(f"[DEBUG] Extracted info 2: character={info2['character']}, boss={info2['boss']}, difficulty={info2['difficulty']}, raid_size={info2['raid_size']}")
+    print(f"[DEBUG] User provided names: target={user_target}, me={user_me}")
 
     # 역할에 따른 색상 선택
     if role == 'DPS':
@@ -418,9 +422,9 @@ def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embe
     # Description 생성
     description_parts = []
 
-    # 비교 대상 정보 - CSV에서 추출한 이름 우선, 없으면 파일명, 그것도 없으면 "목표"/"나"
-    char1 = result.get('csv_character1') or info1['character'] or file1_name.replace('.csv', '') or "목표"
-    char2 = result.get('csv_character2') or info2['character'] or file2_name.replace('.csv', '') or "나"
+    # 비교 대상 정보 - 우선순위: 사용자 입력 > CSV 추출 > 파일명 > 기본값
+    char1 = user_target or result.get('csv_character1') or info1['character'] or file1_name.replace('.csv', '') or "목표"
+    char2 = user_me or result.get('csv_character2') or info2['character'] or file2_name.replace('.csv', '') or "나"
     description_parts.append(f"**🎯 목표 (비교 대상):** {char1}")
     description_parts.append(f"**👤 나 (내 캐릭터):** {char2}")
 
@@ -685,7 +689,9 @@ async def help_compare(ctx):
         value="1. Warcraftlogs에서 CSV 파일 2개를 다운로드\n"
               "2. 디스코드에 **비교하고 싶은 목표 캐릭터의 CSV를 먼저** 첨부\n"
               "3. **내 캐릭터의 CSV를 두 번째로** 첨부\n"
-              "4. `!compare` 명령어 입력\n"
+              "4. `!compare 목표캐릭터명 내캐릭터명` 명령어 입력\n"
+              "   (예: `!compare 삼십이년째활쟁이 예카링`)\n"
+              "   - 캐릭터명 생략 시: `!compare`만 입력 가능\n"
               "5. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력",
         inline=False
     )
@@ -700,7 +706,7 @@ async def help_compare(ctx):
 
     embed.add_field(
         name="명령어",
-        value="`!compare` - CSV 파일 2개 비교\n"
+        value="`!compare [목표캐릭터] [내캐릭터]` - CSV 파일 2개 비교\n"
               "`!help_compare` - 이 도움말 표시",
         inline=False
     )
@@ -712,14 +718,16 @@ async def help_compare(ctx):
         "1. Warcraftlogs에서 CSV 파일 2개를 다운로드\n"
         "2. 디스코드에 **비교하고 싶은 목표 캐릭터의 CSV를 먼저** 첨부\n"
         "3. **내 캐릭터의 CSV를 두 번째로** 첨부\n"
-        "4. `!compare` 명령어 입력\n"
+        "4. `!compare 목표캐릭터명 내캐릭터명` 명령어 입력\n"
+        "   (예: `!compare 삼십이년째활쟁이 예카링`)\n"
+        "   - 캐릭터명 생략 시: `!compare`만 입력 가능\n"
         "5. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력\n\n"
         "**지원하는 역할:**\n"
         "⚔️ DPS: 총 DPS, 스킬 시전 횟수, 치명타율, DoT Uptime 비교\n"
         "🛡️ 탱커: 받은 피해(DTPS), 피해 감소율, 회피율 비교\n"
         "💚 힐러: 총 HPS, 오버힐, 힐 스킬 사용 빈도, 치명타율 비교\n\n"
         "**명령어:**\n"
-        "`!compare` - CSV 파일 2개 비교\n"
+        "`!compare [목표캐릭터] [내캐릭터]` - CSV 파일 2개 비교\n"
         "`!help_compare` - 이 도움말 표시"
     )
 
