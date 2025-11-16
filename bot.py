@@ -24,41 +24,69 @@ async def on_ready():
 
 @bot.event
 async def on_command_error(ctx, error):
-    """명령어 실행 중 오류가 발생했을 때 처리"""
+    """전역 에러 핸들러"""
     if isinstance(error, commands.CommandInvokeError):
         original_error = error.original
 
-        # 권한 오류 처리
         if isinstance(original_error, discord.Forbidden):
-            if original_error.code == 50013:  # Missing Permissions
-                try:
-                    await ctx.send(
-                        "❌ **권한 오류**: 봇에게 다음 권한이 필요합니다:\n"
-                        "• 메시지 보내기 (Send Messages)\n"
-                        "• 링크 삽입 (Embed Links)\n"
-                        "• 파일 첨부 (Attach Files)\n\n"
-                        "서버 설정 → 역할 → 봇 역할에서 위 권한들을 활성화해주세요."
-                    )
-                except:
-                    # 메시지조차 보낼 수 없는 경우
-                    print(f"❌ 권한 오류 발생 (채널: {ctx.channel.id}): {original_error}")
-            else:
-                await ctx.send(f"❌ Discord API 오류: {original_error}")
-        else:
-            await ctx.send(f"❌ 오류 발생: {original_error}")
+            # 권한 부족 에러
+            try:
+                await ctx.send(
+                    "❌ 봇에게 필요한 권한이 없습니다.\n"
+                    "서버 관리자에게 다음 권한을 부여해달라고 요청하세요:\n"
+                    "• 메시지 보내기 (Send Messages)\n"
+                    "• 링크 첨부 (Embed Links)\n"
+                    "• 파일 첨부 (Attach Files)"
+                )
+            except discord.Forbidden:
+                # 메시지 전송조차 불가능한 경우
+                print(f"[ERROR] Cannot send messages in channel {ctx.channel.id} - Missing permissions")
+            return
+
+        # 기타 에러는 로그만 출력
+        print(f"[ERROR] Command {ctx.command} failed: {original_error}")
+        try:
+            await ctx.send(f"❌ 명령어 실행 중 오류가 발생했습니다: {str(original_error)[:100]}")
+        except:
+            pass
+
+    elif isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"❌ 필수 인자가 누락되었습니다: {error.param}")
+    elif isinstance(error, commands.CommandNotFound):
+        # CommandNotFound는 무시 (사용자가 잘못된 명령어 입력)
+        pass
     else:
-        # 기타 오류는 기본 처리
-        print(f"오류: {error}")
+        print(f"[ERROR] Unhandled error: {error}")
 
 
-def can_send_embeds(ctx) -> bool:
-    """봇이 임베드를 보낼 권한이 있는지 확인"""
-    if ctx.guild is None:
-        # DM에서는 항상 가능
+async def safe_send_embed(ctx, embed, fallback_message=None):
+    """Embed를 안전하게 전송합니다. 권한이 없으면 일반 메시지로 전송합니다."""
+    try:
+        await ctx.send(embed=embed)
         return True
-
-    permissions = ctx.channel.permissions_for(ctx.guild.me)
-    return permissions.send_messages and permissions.embed_links
+    except discord.Forbidden:
+        # Embed 전송 권한이 없으면 일반 텍스트로 시도
+        if fallback_message:
+            try:
+                await ctx.send(fallback_message)
+                return True
+            except discord.Forbidden:
+                # 메시지 전송조차 불가능한 경우
+                print(f"[ERROR] Cannot send messages in channel {ctx.channel.id}")
+                return False
+        else:
+            try:
+                await ctx.send(
+                    "❌ 봇에게 Embed 전송 권한이 없습니다. "
+                    "서버 관리자에게 '링크 첨부(Embed Links)' 권한을 부여해달라고 요청하세요."
+                )
+                return False
+            except discord.Forbidden:
+                print(f"[ERROR] Cannot send messages in channel {ctx.channel.id}")
+                return False
+    except Exception as e:
+        print(f"[ERROR] Failed to send embed: {e}")
+        return False
 
 
 @bot.command(name='compare')
@@ -93,7 +121,11 @@ async def compare(ctx):
         return
 
     # 분석 시작 - 타이핑 표시와 함께
-    status_msg = await ctx.send("⏳ 분석 중...")
+    try:
+        status_msg = await ctx.send("⏳ 분석 중...")
+    except discord.Forbidden:
+        print(f"[ERROR] Cannot send status message in channel {ctx.channel.id} - Missing permissions")
+        return
 
     try:
         # 타이핑 중 표시
@@ -103,22 +135,25 @@ async def compare(ctx):
 
         if result is None or 'error' in result:
             error_msg = result.get('error', '알 수 없는 오류') if result else '분석 실패'
-            await status_msg.edit(content=f"❌ {error_msg}")
+            try:
+                await status_msg.edit(content=f"❌ {error_msg}")
+            except discord.Forbidden:
+                print(f"[ERROR] Cannot edit message in channel {ctx.channel.id}")
             return
 
         # 결과를 Embed로 출력
-        await status_msg.edit(content="✅ 분석 완료!")
-
-        if can_send_embeds(ctx):
-            embed = create_embed(result, csv_files[0].filename, csv_files[1].filename)
-            await ctx.send(embed=embed)
-        else:
-            # 권한이 없으면 일반 텍스트로 전송
-            text_result = create_text_result(result, csv_files[0].filename, csv_files[1].filename)
-            await ctx.send(text_result)
+        embed = create_embed(result, csv_files[0].filename, csv_files[1].filename)
+        try:
+            await status_msg.edit(content="✅ 분석 완료!")
+        except discord.Forbidden:
+            print(f"[ERROR] Cannot edit message in channel {ctx.channel.id}")
+        await safe_send_embed(ctx, embed, fallback_message="분석이 완료되었지만 Embed 권한이 없어 결과를 표시할 수 없습니다.")
 
     except Exception as e:
-        await status_msg.edit(content=f"❌ 분석 오류: {e}")
+        try:
+            await status_msg.edit(content=f"❌ 분석 오류: {e}")
+        except:
+            print(f"[ERROR] Cannot edit status message: {e}")
     finally:
         # 임시 파일 삭제
         try:
@@ -126,76 +161,6 @@ async def compare(ctx):
             os.remove(file2_path)
         except:
             pass
-
-
-def create_text_result(result: dict, file1_name: str, file2_name: str) -> str:
-    """분석 결과를 일반 텍스트로 변환합니다 (권한이 없을 때 사용)"""
-    role = result.get('role', 'UNKNOWN')
-
-    # 역할에 따른 이모지 선택
-    if role == 'DPS':
-        emoji = "⚔️"
-    elif role == 'TANK':
-        emoji = "🛡️"
-    elif role == 'HEALER':
-        emoji = "💚"
-    else:
-        emoji = "📊"
-
-    text = f"{emoji} **WoW Logs 비교 분석 - {role}**\n"
-    text += f"**Before:** `{file1_name}`\n"
-    text += f"**After:** `{file2_name}`\n"
-    text += "─" * 40 + "\n\n"
-
-    summary = result.get('summary', {})
-
-    # 역할별 주요 지표
-    if role == 'DPS' and 'total_dps' in summary:
-        dps_data = summary['total_dps']
-        dps_diff = dps_data['diff']
-        indicator = "📈" if dps_diff > 0 else "📉" if dps_diff < 0 else "➖"
-        sign = "+" if dps_diff > 0 else ""
-        text += f"**💥 총 DPS**\n"
-        text += f"Before: {dps_data['before']:.1f}\n"
-        text += f"After: {dps_data['after']:.1f}\n"
-        text += f"{indicator} 차이: {sign}{dps_diff:.1f} ({sign}{dps_data['diff_percent']:.1f}%)\n\n"
-
-    elif role == 'TANK' and 'total_dtps' in summary:
-        dtps_data = summary['total_dtps']
-        dtps_diff = dtps_data['diff']
-        indicator = "📉" if dtps_diff < 0 else "📈" if dtps_diff > 0 else "➖"
-        sign = "+" if dtps_diff > 0 else ""
-        text += f"**💔 총 받은 피해 (DTPS)**\n"
-        text += f"Before: {dtps_data['before']:.1f}\n"
-        text += f"After: {dtps_data['after']:.1f}\n"
-        text += f"{indicator} 차이: {sign}{dtps_diff:.1f} ({sign}{dtps_data['diff_percent']:.1f}%)\n\n"
-
-    elif role == 'HEALER' and 'total_hps' in summary:
-        hps_data = summary['total_hps']
-        hps_diff = hps_data['diff']
-        indicator = "📈" if hps_diff > 0 else "📉" if hps_diff < 0 else "➖"
-        sign = "+" if hps_diff > 0 else ""
-        text += f"**💚 총 HPS**\n"
-        text += f"Before: {hps_data['before']:.1f}\n"
-        text += f"After: {hps_data['after']:.1f}\n"
-        text += f"{indicator} 차이: {sign}{hps_diff:.1f} ({sign}{hps_data['diff_percent']:.1f}%)\n\n"
-
-    # 개선 제안
-    if result.get('improvements'):
-        text += "**💡 개선 포인트**\n"
-        for imp in result['improvements']:
-            text += f"• {imp}\n"
-        text += "\n"
-
-    # 누락된 스킬
-    if result.get('missing_skills'):
-        text += "**⚠️ 사용하지 않은 스킬**\n"
-        text += ', '.join(result['missing_skills']) + "\n\n"
-
-    text += "─" * 40 + "\n"
-    text += "⚠️ **참고**: 더 자세한 분석 결과를 보려면 봇에게 \"링크 삽입(Embed Links)\" 권한을 부여해주세요."
-
-    return text
 
 
 def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embed:
@@ -429,63 +394,54 @@ def add_healer_fields(embed: discord.Embed, result: dict):
 @bot.command(name='help_compare')
 async def help_compare(ctx):
     """사용법 안내"""
-    if can_send_embeds(ctx):
-        # 권한이 있으면 Embed로 전송
-        embed = discord.Embed(
-            title="📖 WoW Compare Bot 사용법",
-            description="Warcraftlogs CSV 파일 2개를 비교해서 퍼포먼스 차이를 분석합니다.",
-            color=COLOR_BLUE
-        )
+    embed = discord.Embed(
+        title="📖 WoW Compare Bot 사용법",
+        description="Warcraftlogs CSV 파일 2개를 비교해서 퍼포먼스 차이를 분석합니다.",
+        color=COLOR_BLUE
+    )
 
-        embed.add_field(
-            name="사용 방법",
-            value="1. Warcraftlogs에서 CSV 파일 2개를 다운로드\n"
-                  "2. 디스코드에 두 파일을 첨부\n"
-                  "3. `!compare` 명령어 입력\n"
-                  "4. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력",
-            inline=False
-        )
+    embed.add_field(
+        name="사용 방법",
+        value="1. Warcraftlogs에서 CSV 파일 2개를 다운로드\n"
+              "2. 디스코드에 두 파일을 첨부\n"
+              "3. `!compare` 명령어 입력\n"
+              "4. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력",
+        inline=False
+    )
 
-        embed.add_field(
-            name="지원하는 역할",
-            value="⚔️ **DPS**: 총 DPS, 스킬 시전 횟수, 치명타율, DoT Uptime 비교\n"
-                  "🛡️ **탱커**: 받은 피해(DTPS), 피해 감소율, 회피율 비교\n"
-                  "💚 **힐러**: 총 HPS, 오버힐, 힐 스킬 사용 빈도, 치명타율 비교",
-            inline=False
-        )
+    embed.add_field(
+        name="지원하는 역할",
+        value="⚔️ **DPS**: 총 DPS, 스킬 시전 횟수, 치명타율, DoT Uptime 비교\n"
+              "🛡️ **탱커**: 받은 피해(DTPS), 피해 감소율, 회피율 비교\n"
+              "💚 **힐러**: 총 HPS, 오버힐, 힐 스킬 사용 빈도, 치명타율 비교",
+        inline=False
+    )
 
-        embed.add_field(
-            name="명령어",
-            value="`!compare` - CSV 파일 2개 비교\n"
-                  "`!help_compare` - 이 도움말 표시",
-            inline=False
-        )
+    embed.add_field(
+        name="명령어",
+        value="`!compare` - CSV 파일 2개 비교\n"
+              "`!help_compare` - 이 도움말 표시",
+        inline=False
+    )
 
-        await ctx.send(embed=embed)
-    else:
-        # 권한이 없으면 일반 텍스트로 전송
-        help_text = """
-📖 **WoW Compare Bot 사용법**
-Warcraftlogs CSV 파일 2개를 비교해서 퍼포먼스 차이를 분석합니다.
+    # 일반 텍스트 대체 메시지
+    fallback = (
+        "📖 **WoW Compare Bot 사용법**\n\n"
+        "**사용 방법:**\n"
+        "1. Warcraftlogs에서 CSV 파일 2개를 다운로드\n"
+        "2. 디스코드에 두 파일을 첨부\n"
+        "3. `!compare` 명령어 입력\n"
+        "4. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력\n\n"
+        "**지원하는 역할:**\n"
+        "⚔️ DPS: 총 DPS, 스킬 시전 횟수, 치명타율, DoT Uptime 비교\n"
+        "🛡️ 탱커: 받은 피해(DTPS), 피해 감소율, 회피율 비교\n"
+        "💚 힐러: 총 HPS, 오버힐, 힐 스킬 사용 빈도, 치명타율 비교\n\n"
+        "**명령어:**\n"
+        "`!compare` - CSV 파일 2개 비교\n"
+        "`!help_compare` - 이 도움말 표시"
+    )
 
-**사용 방법:**
-1. Warcraftlogs에서 CSV 파일 2개를 다운로드
-2. 디스코드에 두 파일을 첨부
-3. `!compare` 명령어 입력
-4. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력
-
-**지원하는 역할:**
-⚔️ **DPS**: 총 DPS, 스킬 시전 횟수, 치명타율, DoT Uptime 비교
-🛡️ **탱커**: 받은 피해(DTPS), 피해 감소율, 회피율 비교
-💚 **힐러**: 총 HPS, 오버힐, 힐 스킬 사용 빈도, 치명타율 비교
-
-**명령어:**
-`!compare` - CSV 파일 2개 비교
-`!help_compare` - 이 도움말 표시
-
-⚠️ **참고**: 더 나은 형식의 메시지를 보려면 봇에게 "링크 삽입(Embed Links)" 권한을 부여해주세요.
-        """
-        await ctx.send(help_text.strip())
+    await safe_send_embed(ctx, embed, fallback_message=fallback)
 
 
 # 봇 실행
