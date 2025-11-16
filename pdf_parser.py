@@ -104,22 +104,32 @@ def deduplicate_characters(text: str) -> str:
     if not text:
         return text
 
-    # Check if text has duplicated characters (every char appears twice in a row)
+    # Strip whitespace from input
+    text = text.strip()
+
+    if len(text) == 0:
+        return text
+
     # Take every other character starting from index 0
     deduplicated = text[::2]
 
-    # Verify that the pattern is actually duplicated
-    # (compare original with doubled version of deduplicated)
-    if len(text) > 0 and text == (deduplicated[0] + deduplicated[0] if len(deduplicated) > 0 else ''):
-        return deduplicated
+    # Count how many consecutive pairs match
+    if len(text) >= 2:
+        matching_pairs = 0
+        total_pairs = min(len(text) // 2, 20)  # Check first 20 pairs max
 
-    # More robust check: if text length is even and each pair matches
-    if len(text) % 2 == 0:
-        is_duplicated = all(text[i] == text[i+1] for i in range(0, len(text), 2))
-        if is_duplicated:
-            return deduplicated
+        for i in range(0, total_pairs * 2, 2):
+            if i + 1 < len(text) and text[i] == text[i+1]:
+                matching_pairs += 1
 
-    # If not duplicated, return original
+        # If more than 60% of pairs match, assume it's duplicated text
+        # This handles cases where there might be some non-duplicated chars
+        if total_pairs > 0 and (matching_pairs / total_pairs) >= 0.6:
+            print(f"[DEBUG] Deduplication: {matching_pairs}/{total_pairs} pairs matched, deduplicating '{text[:30]}...' -> '{deduplicated[:15]}...'")
+            return deduplicated.strip()
+
+    # If not duplicated, return original (stripped)
+    print(f"[DEBUG] Deduplication: No duplication pattern detected in '{text[:30]}...'")
     return text
 
 
@@ -254,40 +264,71 @@ def parse_pdf(pdf_path: str) -> Dict:
 
             # Find the main data table (not website navigation)
             # The real data table should have:
-            # 1. Multiple rows (>5 typically)
+            # 1. Multiple rows
             # 2. Multiple columns with actual data
             # 3. Not be the website header/navigation
             main_table = None
+            candidate_tables = []
 
-            # Try to find a table that looks like skill/damage data
+            # Analyze all tables and score them
             for idx, table in enumerate(tables):
-                if not table or len(table) < 5:
+                if not table or len(table) < 2:
                     continue
 
-                # Check if first row has suspicious navigation keywords
+                score = 0
+                table_info = {'index': idx, 'table': table, 'score': 0, 'reason': []}
+
+                # Check if first row has suspicious navigation keywords (negative score)
                 first_row = [str(cell).lower() if cell else '' for cell in table[0]]
                 if any('classic fresh' in cell or 'discovery' in cell or 'vanilla' in cell or 'language' in cell.lower() for cell in first_row):
-                    print(f"[DEBUG] Skipping table {idx} - looks like navigation (first row: {table[0][:3]})")
-                    continue
+                    score -= 100
+                    table_info['reason'].append(f"navigation_keywords")
+                    print(f"[DEBUG] Table {idx}: Navigation keywords detected (score: {score})")
+                else:
+                    # Check if table has numeric data (positive score)
+                    has_large_numbers = False
+                    has_small_numbers = False
+                    for row in table[1:min(10, len(table))]:
+                        for cell in row:
+                            cell_str = str(cell) if cell else ''
+                            # Look for numbers with commas (damage numbers)
+                            if re.search(r'\d{1,3}(,\d{3})+', cell_str):
+                                has_large_numbers = True
+                            # Look for numbers 3+ digits
+                            elif re.search(r'\d{3,}', cell_str):
+                                has_small_numbers = True
 
-                # Check if table has numeric data in later rows (sign of actual data table)
-                has_numbers = False
-                for row in table[1:min(5, len(table))]:
-                    for cell in row:
-                        if cell and re.search(r'\d{3,}', str(cell)):  # Look for numbers with 3+ digits
-                            has_numbers = True
-                            break
-                    if has_numbers:
-                        break
+                    if has_large_numbers:
+                        score += 50
+                        table_info['reason'].append("has_formatted_numbers")
+                    elif has_small_numbers:
+                        score += 30
+                        table_info['reason'].append("has_numbers")
 
-                if has_numbers:
-                    print(f"[DEBUG] Found data table at index {idx} with {len(table)} rows")
-                    main_table = table
-                    break
+                    # More rows = better (up to a point)
+                    row_score = min(len(table), 30)
+                    score += row_score
+                    table_info['reason'].append(f"{len(table)}_rows")
 
-            # Fallback: use the largest table if no good candidate found
-            if not main_table:
-                print(f"[DEBUG] No ideal table found, using largest table as fallback")
+                    # More columns = better (up to a point)
+                    col_count = len(table[0]) if table else 0
+                    col_score = min(col_count * 2, 20)
+                    score += col_score
+                    table_info['reason'].append(f"{col_count}_cols")
+
+                table_info['score'] = score
+                candidate_tables.append(table_info)
+                print(f"[DEBUG] Table {idx}: {len(table)} rows, score={score}, reasons={table_info['reason']}")
+
+            # Select the table with the highest score
+            if candidate_tables:
+                candidate_tables.sort(key=lambda x: x['score'], reverse=True)
+                best = candidate_tables[0]
+                main_table = best['table']
+                print(f"[DEBUG] Selected table {best['index']} with score {best['score']}")
+            else:
+                # Last resort fallback
+                print(f"[DEBUG] No candidate tables found, using largest table")
                 main_table = max(tables, key=lambda t: len(t) if t else 0)
 
             print(f"[DEBUG] Selected table has {len(main_table)} rows")
