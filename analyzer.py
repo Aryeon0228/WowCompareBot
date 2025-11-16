@@ -13,10 +13,20 @@ class WowLogAnalyzer:
         self.df1 = None
         self.df2 = None
         self.role = None
+        self.combat_duration1 = None  # 전투 시간 (초)
+        self.combat_duration2 = None
+        self.character1 = None  # CSV에서 추출한 캐릭터 이름
+        self.character2 = None
+        self.boss1 = None  # CSV에서 추출한 보스 이름
+        self.boss2 = None
 
     def load_csvs(self) -> bool:
         """CSV 파일들을 로드합니다"""
         try:
+            # CSV 파일의 첫 몇 줄을 읽어서 메타데이터 확인
+            self._extract_metadata(self.csv1_path, 1)
+            self._extract_metadata(self.csv2_path, 2)
+
             self.df1 = pd.read_csv(self.csv1_path, encoding='utf-8')
             self.df2 = pd.read_csv(self.csv2_path, encoding='utf-8')
 
@@ -24,10 +34,57 @@ class WowLogAnalyzer:
             print(f"[DEBUG] CSV1 columns: {self.df1.columns.tolist()}")
             print(f"[DEBUG] CSV2 columns: {self.df2.columns.tolist()}")
 
+            # 전투 시간 추출 시도
+            self._extract_combat_duration()
+
             return True
         except Exception as e:
             print(f"CSV 로드 오류: {e}")
             return False
+
+    def _extract_metadata(self, csv_path: str, file_num: int):
+        """CSV 파일에서 메타데이터(캐릭터명, 보스명 등)를 추출합니다"""
+        try:
+            # 첫 10줄만 읽어서 메타데이터 찾기
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                lines = [f.readline() for _ in range(10)]
+
+            # 디버깅: 첫 3줄 출력
+            print(f"[DEBUG] CSV{file_num} first 3 lines:")
+            for i, line in enumerate(lines[:3]):
+                print(f"  Line {i}: {line.strip()[:100]}")
+
+            # 여기서 특정 패턴으로 캐릭터/보스 이름 추출 가능
+            # 예: "Character: 이름" 또는 "Boss: 보스명" 형태
+
+        except Exception as e:
+            print(f"[WARNING] 메타데이터 추출 실패: {e}")
+
+    def _extract_combat_duration(self):
+        """CSV에서 전투 시간을 추출합니다"""
+        try:
+            # 'Active Time', 'Duration', 'Time' 등의 컬럼 확인
+            duration_columns = ['Active Time', 'Duration', 'Time', 'Active']
+
+            for col in duration_columns:
+                if col in self.df1.columns:
+                    # 시간 값이 있으면 평균 또는 최대값 사용
+                    time_val = self.df1[col].max()
+                    if pd.notna(time_val) and time_val > 0:
+                        self.combat_duration1 = time_val
+                        print(f"[DEBUG] CSV1 combat duration from '{col}': {time_val}")
+                        break
+
+            for col in duration_columns:
+                if col in self.df2.columns:
+                    time_val = self.df2[col].max()
+                    if pd.notna(time_val) and time_val > 0:
+                        self.combat_duration2 = time_val
+                        print(f"[DEBUG] CSV2 combat duration from '{col}': {time_val}")
+                        break
+
+        except Exception as e:
+            print(f"[WARNING] 전투 시간 추출 실패: {e}")
 
     def detect_role(self) -> Optional[str]:
         """CSV의 컬럼을 분석해서 역할을 자동으로 감지합니다"""
@@ -468,11 +525,30 @@ class WowLogAnalyzer:
         if not role:
             return {'error': '역할을 감지할 수 없습니다. CSV 형식을 확인해주세요.'}
 
+        result = None
         if role == 'DPS':
-            return self.compare_dps()
+            result = self.compare_dps()
         elif role == 'TANK':
-            return self.compare_tank()
+            result = self.compare_tank()
         elif role == 'HEALER':
-            return self.compare_healer()
+            result = self.compare_healer()
         else:
             return {'error': f'지원하지 않는 역할입니다: {role}'}
+
+        # CSV에서 추출한 메타데이터 추가
+        if result:
+            result['csv_character1'] = self.character1
+            result['csv_character2'] = self.character2
+            result['csv_boss1'] = self.boss1
+            result['csv_boss2'] = self.boss2
+            result['combat_duration1'] = self.combat_duration1
+            result['combat_duration2'] = self.combat_duration2
+
+            # 전투 시간 경고 추가
+            if self.combat_duration1 and self.combat_duration2:
+                if abs(self.combat_duration1 - self.combat_duration2) > 30:  # 30초 이상 차이
+                    duration_diff = abs(self.combat_duration1 - self.combat_duration2)
+                    result.setdefault('improvements', []).insert(0,
+                        f"⚠️ 전투 시간 차이: {duration_diff:.0f}초. DPS/HPS는 이미 '초당' 값이므로 비교 가능하지만, 전체 데미지/힐량은 다를 수 있습니다.")
+
+        return result
