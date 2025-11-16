@@ -114,8 +114,11 @@ async def compare(ctx):
     temp_dir = 'temp_csvs'
     os.makedirs(temp_dir, exist_ok=True)
 
-    file1_path = os.path.join(temp_dir, csv_files[0].filename)
-    file2_path = os.path.join(temp_dir, csv_files[1].filename)
+    # 파일 이름이 같을 수 있으므로 고유한 이름 사용
+    import time
+    timestamp = int(time.time() * 1000)
+    file1_path = os.path.join(temp_dir, f'file1_{timestamp}_{csv_files[0].filename}')
+    file2_path = os.path.join(temp_dir, f'file2_{timestamp}_{csv_files[1].filename}')
 
     try:
         await csv_files[0].save(file1_path)
