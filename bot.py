@@ -334,21 +334,27 @@ def extract_character_info(filename: str) -> dict:
     }
 
     # 캐릭터 이름 추출: 다양한 패턴 시도
-    # 패턴 1: '이름' 형식 (작은따옴표)
-    char_match = re.search(r"'([^']+)'", filename)
-    if char_match:
-        info['character'] = char_match.group(1)
+    # 패턴 1: 한글 Warcraftlogs 형식 - "역할 캐릭터명 - 보스명 ..."
+    # 예: "입힌 피해 삼십이년째활쟁이 - 황실 장로 조르로크 Heroic..."
+    korean_match = re.search(r'^(?:입힌 피해|치유|받은 피해)\s+(.+?)\s+-', filename)
+    if korean_match:
+        info['character'] = korean_match.group(1).strip()
     else:
-        # 패턴 2: "이름" 형식 (큰따옴표)
-        char_match = re.search(r'"([^"]+)"', filename)
+        # 패턴 2: '이름' 형식 (작은따옴표)
+        char_match = re.search(r"'([^']+)'", filename)
         if char_match:
             info['character'] = char_match.group(1)
         else:
-            # 패턴 3: 파일명의 첫 부분 (CSV 확장자 제거 후 첫 번째 단어/구문)
-            # 예: "CharacterName-Boss.csv" -> "CharacterName"
-            name_part = filename.replace('.csv', '').split('-')[0].split('_')[0].strip()
-            if name_part and len(name_part) > 0:
-                info['character'] = name_part
+            # 패턴 3: "이름" 형식 (큰따옴표)
+            char_match = re.search(r'"([^"]+)"', filename)
+            if char_match:
+                info['character'] = char_match.group(1)
+            else:
+                # 패턴 4: 파일명의 첫 부분 (CSV 확장자 제거 후 첫 번째 단어/구문)
+                # 예: "CharacterName-Boss.csv" -> "CharacterName"
+                name_part = filename.replace('.csv', '').split('-')[0].split('_')[0].strip()
+                if name_part and len(name_part) > 0:
+                    info['character'] = name_part
 
     # 난이도 추출: Heroic, Normal, Mythic 등
     if 'Heroic' in filename:
@@ -359,18 +365,24 @@ def extract_character_info(filename: str) -> dict:
         info['difficulty'] = 'Normal'
 
     # 레이드 인원 추출: 10, 25 등
-    size_match = re.search(r'(\d+)_Player', filename)
+    size_match = re.search(r'(\d+)\s*Player', filename)
     if size_match:
         info['raid_size'] = size_match.group(1)
 
-    # 보스/던전 이름 추출
-    if 'Dragon_Soul' in filename or 'Dragon Soul' in filename:
-        info['boss'] = 'Dragon Soul'
-    elif 'Firelands' in filename:
-        info['boss'] = 'Firelands'
-    elif 'Icecrown' in filename:
-        info['boss'] = 'Icecrown Citadel'
-    # 더 많은 레이드 추가 가능
+    # 보스 이름 추출
+    # 패턴 1: 한글 Warcraftlogs 형식 - "- 보스명 Heroic/Normal/Mythic/Kill/("
+    boss_match = re.search(r'-\s+(.+?)\s+(?:Heroic|Normal|Mythic|Kill|\()', filename)
+    if boss_match:
+        info['boss'] = boss_match.group(1).strip()
+    else:
+        # 패턴 2: 기존 레이드 이름 키워드 기반
+        if 'Dragon_Soul' in filename or 'Dragon Soul' in filename:
+            info['boss'] = 'Dragon Soul'
+        elif 'Firelands' in filename:
+            info['boss'] = 'Firelands'
+        elif 'Icecrown' in filename:
+            info['boss'] = 'Icecrown Citadel'
+        # 더 많은 레이드 추가 가능
 
     return info
 
@@ -497,14 +509,14 @@ def add_dps_fields(embed: discord.Embed, result: dict):
             crit_sign = "+" if crit_diff > 0 else ""
 
             skills_text += f"**{skill['name']}**\n"
-            skills_text += f"  {casts_indicator} Casts: {skill['casts']['before']} > {skill['casts']['after']} ({casts_diff:+d})\n"
-            skills_text += f"  🎯 Crit: {skill['crit_percent']['before']:.1f}% > {skill['crit_percent']['after']:.1f}% ({crit_sign}{crit_diff:.1f}%)\n"
+            skills_text += f"  {casts_indicator} Casts: 🎯 {skill['casts']['before']} vs 👤 {skill['casts']['after']} ({casts_diff:+d})\n"
+            skills_text += f"  💥 Crit: 🎯 {skill['crit_percent']['before']:.1f}% vs 👤 {skill['crit_percent']['after']:.1f}% ({crit_sign}{crit_diff:.1f}%)\n"
 
             # Uptime이 있는 경우 (DoT 스킬)
             if skill['uptime_percent']['before'] > 0 or skill['uptime_percent']['after'] > 0:
                 uptime_diff = skill['uptime_percent']['diff']
                 uptime_sign = "+" if uptime_diff > 0 else ""
-                skills_text += f"  ⏱️ Uptime: {skill['uptime_percent']['before']:.1f}% > {skill['uptime_percent']['after']:.1f}% ({uptime_sign}{uptime_diff:.1f}%)\n"
+                skills_text += f"  ⏱️ Uptime: 🎯 {skill['uptime_percent']['before']:.1f}% vs 👤 {skill['uptime_percent']['after']:.1f}% ({uptime_sign}{uptime_diff:.1f}%)\n"
 
             skills_text += "\n"
 
@@ -578,7 +590,7 @@ def add_tank_fields(embed: discord.Embed, result: dict):
             indicator = "⬆️" if dtps_diff > 0 else "⬇️" if dtps_diff < 0 else "➖"
 
             sources_text += f"**{source['name']}**\n"
-            sources_text += f"  {indicator} DTPS: {source['dtps']['before']:.1f} > {source['dtps']['after']:.1f} ({dtps_diff:+.1f})\n\n"
+            sources_text += f"  {indicator} DTPS: 🎯 {source['dtps']['before']:.1f} vs 👤 {source['dtps']['after']:.1f} ({dtps_diff:+.1f})\n\n"
 
         if sources_text:
             embed.add_field(name="⚔️ 주요 피해 소스", value=sources_text.strip(), inline=False)
@@ -639,9 +651,9 @@ def add_healer_fields(embed: discord.Embed, result: dict):
             crit_sign = "+" if crit_diff > 0 else ""
 
             heals_text += f"**{heal['name']}**\n"
-            heals_text += f"  {hps_indicator} HPS: {heal['hps']['before']:.1f} > {heal['hps']['after']:.1f} ({hps_diff:+.1f})\n"
-            heals_text += f"  {casts_indicator} Casts: {heal['casts']['before']} > {heal['casts']['after']} ({casts_diff:+d})\n"
-            heals_text += f"  🎯 Crit: {heal['crit_percent']['before']:.1f}% > {heal['crit_percent']['after']:.1f}% ({crit_sign}{crit_diff:.1f}%)\n\n"
+            heals_text += f"  {hps_indicator} HPS: 🎯 {heal['hps']['before']:.1f} vs 👤 {heal['hps']['after']:.1f} ({hps_diff:+.1f})\n"
+            heals_text += f"  {casts_indicator} Casts: 🎯 {heal['casts']['before']} vs 👤 {heal['casts']['after']} ({casts_diff:+d})\n"
+            heals_text += f"  💥 Crit: 🎯 {heal['crit_percent']['before']:.1f}% vs 👤 {heal['crit_percent']['after']:.1f}% ({crit_sign}{crit_diff:.1f}%)\n\n"
 
         if heals_text:
             embed.add_field(name="💊 주요 힐 스킬 비교", value=heals_text.strip(), inline=False)
