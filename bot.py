@@ -334,21 +334,27 @@ def extract_character_info(filename: str) -> dict:
     }
 
     # 캐릭터 이름 추출: 다양한 패턴 시도
-    # 패턴 1: '이름' 형식 (작은따옴표)
-    char_match = re.search(r"'([^']+)'", filename)
-    if char_match:
-        info['character'] = char_match.group(1)
+    # 패턴 1: 한글 Warcraftlogs 형식 - "역할 캐릭터명 - 보스명 ..."
+    # 예: "입힌 피해 삼십이년째활쟁이 - 황실 장로 조르로크 Heroic..."
+    korean_match = re.search(r'^(?:입힌 피해|치유|받은 피해)\s+(.+?)\s+-', filename)
+    if korean_match:
+        info['character'] = korean_match.group(1).strip()
     else:
-        # 패턴 2: "이름" 형식 (큰따옴표)
-        char_match = re.search(r'"([^"]+)"', filename)
+        # 패턴 2: '이름' 형식 (작은따옴표)
+        char_match = re.search(r"'([^']+)'", filename)
         if char_match:
             info['character'] = char_match.group(1)
         else:
-            # 패턴 3: 파일명의 첫 부분 (CSV 확장자 제거 후 첫 번째 단어/구문)
-            # 예: "CharacterName-Boss.csv" -> "CharacterName"
-            name_part = filename.replace('.csv', '').split('-')[0].split('_')[0].strip()
-            if name_part and len(name_part) > 0:
-                info['character'] = name_part
+            # 패턴 3: "이름" 형식 (큰따옴표)
+            char_match = re.search(r'"([^"]+)"', filename)
+            if char_match:
+                info['character'] = char_match.group(1)
+            else:
+                # 패턴 4: 파일명의 첫 부분 (CSV 확장자 제거 후 첫 번째 단어/구문)
+                # 예: "CharacterName-Boss.csv" -> "CharacterName"
+                name_part = filename.replace('.csv', '').split('-')[0].split('_')[0].strip()
+                if name_part and len(name_part) > 0:
+                    info['character'] = name_part
 
     # 난이도 추출: Heroic, Normal, Mythic 등
     if 'Heroic' in filename:
@@ -359,18 +365,24 @@ def extract_character_info(filename: str) -> dict:
         info['difficulty'] = 'Normal'
 
     # 레이드 인원 추출: 10, 25 등
-    size_match = re.search(r'(\d+)_Player', filename)
+    size_match = re.search(r'(\d+)\s*Player', filename)
     if size_match:
         info['raid_size'] = size_match.group(1)
 
-    # 보스/던전 이름 추출
-    if 'Dragon_Soul' in filename or 'Dragon Soul' in filename:
-        info['boss'] = 'Dragon Soul'
-    elif 'Firelands' in filename:
-        info['boss'] = 'Firelands'
-    elif 'Icecrown' in filename:
-        info['boss'] = 'Icecrown Citadel'
-    # 더 많은 레이드 추가 가능
+    # 보스 이름 추출
+    # 패턴 1: 한글 Warcraftlogs 형식 - "- 보스명 Heroic/Normal/Mythic/Kill/("
+    boss_match = re.search(r'-\s+(.+?)\s+(?:Heroic|Normal|Mythic|Kill|\()', filename)
+    if boss_match:
+        info['boss'] = boss_match.group(1).strip()
+    else:
+        # 패턴 2: 기존 레이드 이름 키워드 기반
+        if 'Dragon_Soul' in filename or 'Dragon Soul' in filename:
+            info['boss'] = 'Dragon Soul'
+        elif 'Firelands' in filename:
+            info['boss'] = 'Firelands'
+        elif 'Icecrown' in filename:
+            info['boss'] = 'Icecrown Citadel'
+        # 더 많은 레이드 추가 가능
 
     return info
 
