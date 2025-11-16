@@ -418,9 +418,9 @@ def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embe
     # Description 생성
     description_parts = []
 
-    # 비교 대상 정보 - 캐릭터 이름이 없으면 파일명 사용
-    char1 = info1['character'] if info1['character'] else file1_name.replace('.csv', '')
-    char2 = info2['character'] if info2['character'] else file2_name.replace('.csv', '')
+    # 비교 대상 정보 - CSV에서 추출한 이름 우선, 없으면 파일명, 그것도 없으면 "목표"/"나"
+    char1 = result.get('csv_character1') or info1['character'] or file1_name.replace('.csv', '') or "목표"
+    char2 = result.get('csv_character2') or info2['character'] or file2_name.replace('.csv', '') or "나"
     description_parts.append(f"**🎯 목표 (비교 대상):** {char1}")
     description_parts.append(f"**👤 나 (내 캐릭터):** {char2}")
 
@@ -428,7 +428,7 @@ def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embe
     fight_info = []
     difficulty = info1['difficulty'] or info2['difficulty']
     raid_size = info1['raid_size'] or info2['raid_size']
-    boss = info1['boss'] or info2['boss']
+    boss = result.get('csv_boss1') or result.get('csv_boss2') or info1['boss'] or info2['boss']
 
     if boss:
         fight_info.append(boss)
@@ -439,6 +439,12 @@ def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embe
 
     if fight_info:
         description_parts.append(f"\n⚔️ **전투:** {' '.join(fight_info)}")
+
+    # 전투 시간 정보 추가
+    duration1 = result.get('combat_duration1')
+    duration2 = result.get('combat_duration2')
+    if duration1 and duration2:
+        description_parts.append(f"⏱️ **전투 시간:** 🎯 {duration1:.0f}초 vs 👤 {duration2:.0f}초")
 
     embed = discord.Embed(
         title=f"{emoji} WoW Logs 비교 분석 - {role}",
