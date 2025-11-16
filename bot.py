@@ -123,6 +123,13 @@ async def compare(ctx):
     try:
         await csv_files[0].save(file1_path)
         await csv_files[1].save(file2_path)
+
+        # 디버깅: 파일 크기 확인
+        size1 = os.path.getsize(file1_path)
+        size2 = os.path.getsize(file2_path)
+        print(f"[DEBUG] File1: {csv_files[0].filename} ({size1} bytes) -> {file1_path}")
+        print(f"[DEBUG] File2: {csv_files[1].filename} ({size2} bytes) -> {file2_path}")
+
     except Exception as e:
         await ctx.send(f"❌ 파일 다운로드 오류: {e}")
         return
