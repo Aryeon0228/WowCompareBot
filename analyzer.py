@@ -19,6 +19,11 @@ class WowLogAnalyzer:
         try:
             self.df1 = pd.read_csv(self.csv1_path, encoding='utf-8')
             self.df2 = pd.read_csv(self.csv2_path, encoding='utf-8')
+
+            # 디버깅: CSV 컬럼 출력
+            print(f"[DEBUG] CSV1 columns: {self.df1.columns.tolist()}")
+            print(f"[DEBUG] CSV2 columns: {self.df2.columns.tolist()}")
+
             return True
         except Exception as e:
             print(f"CSV 로드 오류: {e}")

@@ -395,6 +395,12 @@ def create_embed(result: dict, file1_name: str, file2_name: str) -> discord.Embe
     info1 = extract_character_info(file1_name)
     info2 = extract_character_info(file2_name)
 
+    # 디버깅: 추출된 정보 로그
+    print(f"[DEBUG] File 1: {file1_name}")
+    print(f"[DEBUG] Extracted info 1: character={info1['character']}, boss={info1['boss']}, difficulty={info1['difficulty']}, raid_size={info1['raid_size']}")
+    print(f"[DEBUG] File 2: {file2_name}")
+    print(f"[DEBUG] Extracted info 2: character={info2['character']}, boss={info2['boss']}, difficulty={info2['difficulty']}, raid_size={info2['raid_size']}")
+
     # 역할에 따른 색상 선택
     if role == 'DPS':
         color = COLOR_RED
