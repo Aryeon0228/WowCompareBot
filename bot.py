@@ -7,6 +7,7 @@ matplotlib.use('Agg')  # GUI 없이 이미지 생성
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 from analyzer import WowLogAnalyzer
+from pdf_parser import pdf_to_csv_format
 from config import DISCORD_TOKEN, COMMAND_PREFIX, COLOR_GREEN, COLOR_RED, COLOR_BLUE
 
 
@@ -98,19 +99,20 @@ async def compare(ctx, target: str = None, me: str = None):
     """
     !compare 명령어
     사용법: !compare [목표캐릭터] [내캐릭터]
-    2개의 CSV 파일을 첨부하고 이 명령어를 입력하면 분석 결과를 출력합니다.
+    2개의 CSV 또는 PDF 파일을 첨부하고 이 명령어를 입력하면 분석 결과를 출력합니다.
 
     예시: !compare 삼십이년째활쟁이 예카링
     """
     # 첨부파일 확인
     if len(ctx.message.attachments) != 2:
-        await ctx.send("❌ CSV 파일 2개를 첨부해주세요!")
+        await ctx.send("❌ CSV 또는 PDF 파일 2개를 첨부해주세요!")
         return
 
-    # CSV 파일인지 확인
-    csv_files = [att for att in ctx.message.attachments if att.filename.endswith('.csv')]
-    if len(csv_files) != 2:
-        await ctx.send("❌ 두 파일 모두 CSV 형식이어야 합니다!")
+    # CSV 또는 PDF 파일인지 확인
+    valid_files = [att for att in ctx.message.attachments
+                   if att.filename.endswith('.csv') or att.filename.endswith('.pdf')]
+    if len(valid_files) != 2:
+        await ctx.send("❌ 두 파일 모두 CSV 또는 PDF 형식이어야 합니다!")
         return
 
     # 파일 다운로드
@@ -120,22 +122,53 @@ async def compare(ctx, target: str = None, me: str = None):
     # 파일 이름이 같을 수 있으므로 고유한 이름 사용
     import time
     timestamp = int(time.time() * 1000)
-    file1_path = os.path.join(temp_dir, f'file1_{timestamp}_{csv_files[0].filename}')
-    file2_path = os.path.join(temp_dir, f'file2_{timestamp}_{csv_files[1].filename}')
+    file1_path = os.path.join(temp_dir, f'file1_{timestamp}_{valid_files[0].filename}')
+    file2_path = os.path.join(temp_dir, f'file2_{timestamp}_{valid_files[1].filename}')
 
     try:
-        await csv_files[0].save(file1_path)
-        await csv_files[1].save(file2_path)
+        await valid_files[0].save(file1_path)
+        await valid_files[1].save(file2_path)
 
         # 디버깅: 파일 크기 확인
         size1 = os.path.getsize(file1_path)
         size2 = os.path.getsize(file2_path)
-        print(f"[DEBUG] File1: {csv_files[0].filename} ({size1} bytes) -> {file1_path}")
-        print(f"[DEBUG] File2: {csv_files[1].filename} ({size2} bytes) -> {file2_path}")
+        print(f"[DEBUG] File1: {valid_files[0].filename} ({size1} bytes) -> {file1_path}")
+        print(f"[DEBUG] File2: {valid_files[1].filename} ({size2} bytes) -> {file2_path}")
 
     except Exception as e:
         await ctx.send(f"❌ 파일 다운로드 오류: {e}")
         return
+
+    # PDF 파일 처리 - PDF인 경우 CSV로 변환
+    pdf_metadata1 = None
+    pdf_metadata2 = None
+    csv1_path = file1_path
+    csv2_path = file2_path
+
+    if file1_path.endswith('.pdf'):
+        try:
+            df1, pdf_metadata1 = pdf_to_csv_format(file1_path)
+            # DataFrame을 임시 CSV로 저장
+            csv1_path = file1_path.replace('.pdf', '_converted.csv')
+            df1.to_csv(csv1_path, index=False)
+            print(f"[DEBUG] PDF1 converted: character={pdf_metadata1.get('character')}, boss={pdf_metadata1.get('boss')}")
+        except Exception as e:
+            await ctx.send(f"❌ PDF 파일 1 파싱 오류: {e}")
+            return
+
+    if file2_path.endswith('.pdf'):
+        try:
+            df2, pdf_metadata2 = pdf_to_csv_format(file2_path)
+            # DataFrame을 임시 CSV로 저장
+            csv2_path = file2_path.replace('.pdf', '_converted.csv')
+            df2.to_csv(csv2_path, index=False)
+            print(f"[DEBUG] PDF2 converted: character={pdf_metadata2.get('character')}, boss={pdf_metadata2.get('boss')}")
+        except Exception as e:
+            await ctx.send(f"❌ PDF 파일 2 파싱 오류: {e}")
+            # Clean up first converted file if it exists
+            if csv1_path != file1_path and os.path.exists(csv1_path):
+                os.remove(csv1_path)
+            return
 
     # 분석 시작 - 타이핑 표시와 함께
     try:
@@ -147,8 +180,25 @@ async def compare(ctx, target: str = None, me: str = None):
     try:
         # 타이핑 중 표시
         async with ctx.typing():
-            analyzer = WowLogAnalyzer(file1_path, file2_path)
+            analyzer = WowLogAnalyzer(csv1_path, csv2_path)
             result = analyzer.analyze()
+
+            # PDF 메타데이터를 결과에 추가
+            if pdf_metadata1:
+                if pdf_metadata1.get('character'):
+                    result['csv_character1'] = pdf_metadata1['character']
+                if pdf_metadata1.get('boss'):
+                    result['csv_boss1'] = pdf_metadata1['boss']
+                if pdf_metadata1.get('combat_duration'):
+                    result['combat_duration1'] = pdf_metadata1['combat_duration']
+
+            if pdf_metadata2:
+                if pdf_metadata2.get('character'):
+                    result['csv_character2'] = pdf_metadata2['character']
+                if pdf_metadata2.get('boss'):
+                    result['csv_boss2'] = pdf_metadata2['boss']
+                if pdf_metadata2.get('combat_duration'):
+                    result['combat_duration2'] = pdf_metadata2['combat_duration']
 
         if result is None or 'error' in result:
             error_msg = result.get('error', '알 수 없는 오류') if result else '분석 실패'
@@ -159,12 +209,12 @@ async def compare(ctx, target: str = None, me: str = None):
             return
 
         # 결과를 Embed로 출력 (사용자 지정 이름 전달)
-        embed = create_embed(result, csv_files[0].filename, csv_files[1].filename, target, me)
+        embed = create_embed(result, valid_files[0].filename, valid_files[1].filename, target, me)
 
         # 그래프 생성
         graph_path = None
         try:
-            graph_path = create_comparison_graph(result, csv_files[0].filename, csv_files[1].filename)
+            graph_path = create_comparison_graph(result, valid_files[0].filename, valid_files[1].filename)
         except Exception as e:
             print(f"[WARNING] Graph creation failed: {e}")
 
@@ -205,6 +255,11 @@ async def compare(ctx, target: str = None, me: str = None):
         try:
             os.remove(file1_path)
             os.remove(file2_path)
+            # PDF에서 변환된 CSV 파일도 삭제
+            if csv1_path != file1_path and os.path.exists(csv1_path):
+                os.remove(csv1_path)
+            if csv2_path != file2_path and os.path.exists(csv2_path):
+                os.remove(csv2_path)
         except:
             pass
 
@@ -680,18 +735,19 @@ async def help_compare(ctx):
     """사용법 안내"""
     embed = discord.Embed(
         title="📖 WoW Compare Bot 사용법",
-        description="Warcraftlogs CSV 파일 2개를 비교해서 퍼포먼스 차이를 분석합니다.",
+        description="Warcraftlogs CSV 또는 PDF 파일 2개를 비교해서 퍼포먼스 차이를 분석합니다.",
         color=COLOR_BLUE
     )
 
     embed.add_field(
         name="사용 방법",
-        value="1. Warcraftlogs에서 CSV 파일 2개를 다운로드\n"
-              "2. 디스코드에 **비교하고 싶은 목표 캐릭터의 CSV를 먼저** 첨부\n"
-              "3. **내 캐릭터의 CSV를 두 번째로** 첨부\n"
+        value="1. Warcraftlogs에서 CSV 또는 PDF 파일 2개를 다운로드\n"
+              "   💡 **PDF 추천**: 캐릭터/보스 이름 자동 추출!\n"
+              "2. 디스코드에 **비교하고 싶은 목표 캐릭터 파일을 먼저** 첨부\n"
+              "3. **내 캐릭터 파일을 두 번째로** 첨부\n"
               "4. `!compare 목표캐릭터명 내캐릭터명` 명령어 입력\n"
               "   (예: `!compare 삼십이년째활쟁이 예카링`)\n"
-              "   - 캐릭터명 생략 시: `!compare`만 입력 가능\n"
+              "   - PDF 사용 시 캐릭터명 생략 가능: `!compare`\n"
               "5. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력",
         inline=False
     )
@@ -715,19 +771,20 @@ async def help_compare(ctx):
     fallback = (
         "📖 **WoW Compare Bot 사용법**\n\n"
         "**사용 방법:**\n"
-        "1. Warcraftlogs에서 CSV 파일 2개를 다운로드\n"
-        "2. 디스코드에 **비교하고 싶은 목표 캐릭터의 CSV를 먼저** 첨부\n"
-        "3. **내 캐릭터의 CSV를 두 번째로** 첨부\n"
+        "1. Warcraftlogs에서 CSV 또는 PDF 파일 2개를 다운로드\n"
+        "   💡 **PDF 추천**: 캐릭터/보스 이름 자동 추출!\n"
+        "2. 디스코드에 **비교하고 싶은 목표 캐릭터 파일을 먼저** 첨부\n"
+        "3. **내 캐릭터 파일을 두 번째로** 첨부\n"
         "4. `!compare 목표캐릭터명 내캐릭터명` 명령어 입력\n"
         "   (예: `!compare 삼십이년째활쟁이 예카링`)\n"
-        "   - 캐릭터명 생략 시: `!compare`만 입력 가능\n"
+        "   - PDF 사용 시 캐릭터명 생략 가능: `!compare`\n"
         "5. 자동으로 역할(DPS/Tank/Healer)을 감지하고 분석 결과 출력\n\n"
         "**지원하는 역할:**\n"
         "⚔️ DPS: 총 DPS, 스킬 시전 횟수, 치명타율, DoT Uptime 비교\n"
         "🛡️ 탱커: 받은 피해(DTPS), 피해 감소율, 회피율 비교\n"
         "💚 힐러: 총 HPS, 오버힐, 힐 스킬 사용 빈도, 치명타율 비교\n\n"
         "**명령어:**\n"
-        "`!compare [목표캐릭터] [내캐릭터]` - CSV 파일 2개 비교\n"
+        "`!compare [목표캐릭터] [내캐릭터]` - CSV/PDF 파일 2개 비교\n"
         "`!help_compare` - 이 도움말 표시"
     )
 
