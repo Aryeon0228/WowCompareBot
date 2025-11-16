@@ -1,0 +1,30 @@
+# 환경 변수 파일
+.env
+
+# Python 캐시
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# 가상 환경
+venv/
+env/
+ENV/
+
+# 임시 CSV 파일
+temp_csvs/
+*.csv
+
+# IDE 설정
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 로그 파일
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
